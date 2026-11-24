@@ -1,0 +1,22 @@
+export type ServiceType = 'PRINT' | 'ATTESTATION';
+
+export type OrderStatus =
+  | 'PLACED'
+  | 'PAYMENT_CONFIRMED'
+  | 'SHOP_ASSIGNED'
+  | 'SHOP_ACCEPTED'
+  | 'PRINTING'
+  | 'PACKED'
+  | 'PICKUP_SCHEDULED'
+  | 'COLLECTED'
+  | 'AGENT_RECEIVED'
+  | 'PROCESSING'
+  | 'ATTESTED'
+  | 'RETURN_SCHEDULED'
+  | 'RIDER_ASSIGNED'
+  | 'PICKED_UP'
+  | 'OUT_FOR_DELIVERY'
+  | 'DELIVERED'
+  | 'COMPLETED'
+  | 'CANCELLED'
+  | 'DISPUTED';

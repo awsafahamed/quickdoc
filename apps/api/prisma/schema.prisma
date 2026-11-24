@@ -1,0 +1,506 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String           @id @default(uuid()) @db.Uuid
+  email           String           @unique
+  name            String
+  passwordHash    String
+  emailVerified   Boolean          @default(false)
+  suspended       Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  ActionToken     ActionToken[]
+  Address         Address[]
+  AuditLog        AuditLog[]
+  CustomerProfile CustomerProfile?
+  Document        Document[]
+  Notification    Notification[]
+  orders          Order[]
+  RefreshSession  RefreshSession[]
+  Review          Review[]
+  RiderProfile    RiderProfile?
+  shop            Shop[]
+  ShopStaff       ShopStaff[]
+  UserRole        UserRole[]
+  agentProfile    AgentProfile?
+}
+
+model AgentProfile {
+  id             String       @id @default(uuid()) @db.Uuid
+  userId         String       @unique @db.Uuid
+  user           User         @relation(fields: [userId], references: [id])
+  businessName   String
+  address        String
+  phone          String
+  status         ApprovalStatus @default(PENDING)
+  isOpen         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  services       AgentService[]
+  jobs           AttestationJob[]
+}
+
+model AgentService {
+  id        String       @id @default(uuid()) @db.Uuid
+  agentId   String       @db.Uuid
+  agent     AgentProfile @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  code      String
+  name      String
+  price     Decimal      @db.Decimal(12, 2)
+  estimatedDays Int
+  enabled   Boolean      @default(true)
+
+  @@unique([agentId, code])
+}
+
+model AttestationJob {
+  id               String        @id @default(uuid()) @db.Uuid
+  reference        String        @unique
+  agentId          String        @db.Uuid
+  agent            AgentProfile  @relation(fields: [agentId], references: [id])
+  customerId       String        @db.Uuid
+  serviceCode      String
+  status           String        @default("PICKUP_SCHEDULED")
+  pickupAddress    Json
+  returnAddress    Json
+  estimatedReadyAt DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  custodyEvents    CustodyEvent[]
+
+  @@index([agentId, status])
+  @@index([customerId, createdAt])
+}
+
+model CustodyEvent {
+  id          String          @id @default(uuid()) @db.Uuid
+  jobId       String          @db.Uuid
+  job         AttestationJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  eventType   String
+  actorId     String
+  evidenceUrl String?
+  note        String?
+  latitude    Decimal?        @db.Decimal(10, 7)
+  longitude   Decimal?        @db.Decimal(10, 7)
+  createdAt   DateTime        @default(now())
+
+  @@index([jobId, createdAt])
+}
+
+model Shop {
+  id           String            @id @default(uuid()) @db.Uuid
+  ownerId      String            @db.Uuid
+  name         String
+  address      String
+  phone        String
+  latitude     Decimal           @db.Decimal(10, 7)
+  longitude    Decimal           @db.Decimal(10, 7)
+  status       ApprovalStatus    @default(PENDING)
+  isOpen       Boolean           @default(false)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  Order        Order[]
+  Review       Review[]
+  Settlement   Settlement[]
+  owner        User              @relation(fields: [ownerId], references: [id])
+  openingHours ShopOpeningHour[]
+  ShopPrice    ShopPrice[]
+  services     ShopService[]
+  staff        ShopStaff[]
+
+  @@index([ownerId])
+  @@index([status, isOpen])
+}
+
+model ShopStaff {
+  shopId String @db.Uuid
+  userId String @db.Uuid
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  User   User   @relation(fields: [userId], references: [id])
+
+  @@id([shopId, userId])
+}
+
+model ShopService {
+  id      String  @id @default(uuid()) @db.Uuid
+  shopId  String  @db.Uuid
+  code    String
+  enabled Boolean @default(true)
+  price   Decimal @default(0) @db.Decimal(12, 2)
+  shop    Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, code])
+}
+
+model ShopOpeningHour {
+  shopId    String @db.Uuid
+  dayOfWeek Int
+  opensAt   String
+  closesAt  String
+  shop      Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@id([shopId, dayOfWeek])
+}
+
+model Order {
+  id                   String                 @id @default(uuid()) @db.Uuid
+  reference            String                 @unique
+  customerId           String                 @db.Uuid
+  shopId               String                 @db.Uuid
+  status               OrderStatus            @default(PENDING_ACCEPTANCE)
+  currency             String                 @default("LKR")
+  printSubtotal        Decimal                @db.Decimal(12, 2)
+  deliveryFee          Decimal                @db.Decimal(12, 2)
+  platformFee          Decimal                @db.Decimal(12, 2)
+  total                Decimal                @db.Decimal(12, 2)
+  commission           Decimal                @db.Decimal(12, 2)
+  deliveryAddress      Json
+  instructions         String?
+  deliveryPinHash      String
+  pickupCodeHash       String
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  deliveryPinEncrypted String?
+  pickupCodeEncrypted  String?
+  pinAttempts          Int                    @default(0)
+  clientKey            String?                @db.Uuid
+  checkoutFingerprint  String?
+  DeliveryAssignment   DeliveryAssignment?
+  FinancialLedgerEntry FinancialLedgerEntry[]
+  customer             User                   @relation(fields: [customerId], references: [id])
+  Shop                 Shop                   @relation(fields: [shopId], references: [id])
+  OrderItem            OrderItem[]
+  OrderStatusHistory   OrderStatusHistory[]
+  Payment              Payment?
+  Review               Review?
+
+  @@unique([customerId, clientKey])
+  @@index([customerId, createdAt])
+  @@index([status, createdAt])
+  @@index([shopId, status, createdAt])
+}
+
+model ActionToken {
+  id        String       @id @db.Uuid
+  userId    String       @db.Uuid
+  tokenHash String       @unique
+  purpose   TokenPurpose
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime     @default(now())
+  User      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+}
+
+model Address {
+  id        String   @id @db.Uuid
+  userId    String   @db.Uuid
+  label     String
+  line      String
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  User      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model AdminSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime
+}
+
+model AuditLog {
+  id        String   @id @db.Uuid
+  actorId   String?  @db.Uuid
+  action    String
+  entityId  String?
+  createdAt DateTime @default(now())
+  User      User?    @relation(fields: [actorId], references: [id])
+
+  @@index([actorId, createdAt])
+  @@index([createdAt])
+}
+
+model CustomerProfile {
+  userId String  @id @db.Uuid
+  phone  String?
+  User   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model DeliveryAssignment {
+  id                    String                  @id @db.Uuid
+  orderId               String                  @unique @db.Uuid
+  riderId               String                  @db.Uuid
+  earnings              Decimal                 @db.Decimal(12, 2)
+  assignedAt            DateTime                @default(now())
+  updatedAt             DateTime
+  Order                 Order                   @relation(fields: [orderId], references: [id])
+  RiderProfile          RiderProfile            @relation(fields: [riderId], references: [userId])
+  DeliveryStatusHistory DeliveryStatusHistory[]
+
+  @@index([riderId, assignedAt])
+}
+
+model DeliveryStatusHistory {
+  id                 String             @id @db.Uuid
+  assignmentId       String             @db.Uuid
+  status             String
+  reason             String?
+  createdAt          DateTime           @default(now())
+  DeliveryAssignment DeliveryAssignment @relation(fields: [assignmentId], references: [id])
+
+  @@index([assignmentId, createdAt])
+}
+
+model Document {
+  id            String      @id @db.Uuid
+  userId        String      @db.Uuid
+  objectKey     String      @unique
+  name          String
+  mimeType      String
+  sizeBytes     Int
+  pageCount     Int?
+  scanStatus    String      @default("PENDING")
+  printReadyKey String?
+  expiresAt     DateTime
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime
+  User          User        @relation(fields: [userId], references: [id])
+  OrderItem     OrderItem[]
+
+  @@index([expiresAt])
+  @@index([userId])
+}
+
+model FinancialLedgerEntry {
+  id        String   @id @db.Uuid
+  orderId   String   @db.Uuid
+  account   String
+  amount    Decimal  @db.Decimal(12, 2)
+  currency  String   @default("LKR")
+  eventKey  String   @unique
+  createdAt DateTime @default(now())
+  Order     Order    @relation(fields: [orderId], references: [id])
+
+  @@index([account, createdAt])
+}
+
+model Notification {
+  id        String    @id @db.Uuid
+  userId    String    @db.Uuid
+  title     String
+  body      String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  User      User      @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+}
+
+model OrderItem {
+  id           String   @id @db.Uuid
+  orderId      String   @db.Uuid
+  documentId   String   @db.Uuid
+  paperSize    String
+  colour       Boolean
+  duplex       Boolean
+  copies       Int
+  pageRange    String
+  printedSides Int
+  orientation  String
+  binding      String?
+  unitPrice    Decimal  @db.Decimal(12, 2)
+  total        Decimal  @db.Decimal(12, 2)
+  Document     Document @relation(fields: [documentId], references: [id])
+  Order        Order    @relation(fields: [orderId], references: [id])
+
+  @@index([documentId])
+  @@index([orderId])
+}
+
+model OrderStatusHistory {
+  id        String      @id @db.Uuid
+  orderId   String      @db.Uuid
+  status    OrderStatus
+  actorId   String      @db.Uuid
+  reason    String?
+  createdAt DateTime    @default(now())
+  Order     Order       @relation(fields: [orderId], references: [id])
+
+  @@index([orderId, createdAt])
+}
+
+model Payment {
+  id               String        @id @db.Uuid
+  orderId          String        @unique @db.Uuid
+  method           PaymentMethod
+  status           PaymentStatus @default(PENDING)
+  amount           Decimal       @db.Decimal(12, 2)
+  gatewayReference String?       @unique
+  idempotencyKey   String        @unique
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime
+  Order            Order         @relation(fields: [orderId], references: [id])
+  Refund           Refund[]
+}
+
+model RefreshSession {
+  id        String    @id @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  familyId  String    @db.Uuid
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  User      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId, familyId])
+}
+
+model Refund {
+  id             String   @id @db.Uuid
+  paymentId      String   @db.Uuid
+  amount         Decimal  @db.Decimal(12, 2)
+  reason         String
+  status         String   @default("REQUESTED")
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime
+  Payment        Payment  @relation(fields: [paymentId], references: [id])
+
+  @@index([paymentId])
+}
+
+model Review {
+  id          String   @id @db.Uuid
+  orderId     String   @unique @db.Uuid
+  userId      String   @db.Uuid
+  shopId      String   @db.Uuid
+  shopRating  Int
+  riderRating Int?
+  comment     String?
+  createdAt   DateTime @default(now())
+  Order       Order    @relation(fields: [orderId], references: [id])
+  Shop        Shop     @relation(fields: [shopId], references: [id])
+  User        User     @relation(fields: [userId], references: [id])
+
+  @@index([shopId])
+}
+
+model RiderAvailability {
+  riderId      String       @id @db.Uuid
+  online       Boolean      @default(false)
+  latitude     Decimal?     @db.Decimal(10, 7)
+  longitude    Decimal?     @db.Decimal(10, 7)
+  updatedAt    DateTime
+  RiderProfile RiderProfile @relation(fields: [riderId], references: [userId])
+}
+
+model RiderProfile {
+  userId             String               @id @db.Uuid
+  phone              String?
+  vehicleType        String?
+  registration       String?
+  status             ApprovalStatus       @default(PENDING)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime
+  DeliveryAssignment DeliveryAssignment[]
+  RiderAvailability  RiderAvailability?
+  User               User                 @relation(fields: [userId], references: [id])
+  Settlement         Settlement[]
+}
+
+model Settlement {
+  id           String        @id @db.Uuid
+  shopId       String?       @db.Uuid
+  riderId      String?       @db.Uuid
+  amount       Decimal       @db.Decimal(12, 2)
+  status       String        @default("PENDING")
+  reference    String?       @unique
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime
+  RiderProfile RiderProfile? @relation(fields: [riderId], references: [userId])
+  Shop         Shop?         @relation(fields: [shopId], references: [id])
+
+  @@index([riderId, status])
+  @@index([shopId, status])
+}
+
+model ShopPrice {
+  id           String   @id @db.Uuid
+  shopId       String   @db.Uuid
+  paperSize    String
+  colour       Boolean
+  duplex       Boolean
+  pricePerSide Decimal  @db.Decimal(12, 2)
+  updatedAt    DateTime
+  Shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, paperSize, colour, duplex])
+}
+
+model UserRole {
+  userId String @db.Uuid
+  role   Role
+  User   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum OrderStatus {
+  PENDING_ACCEPTANCE
+  ACCEPTED
+  REJECTED
+  PRINTING
+  READY_FOR_PICKUP
+  RIDER_ASSIGNED
+  PICKED_UP
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  DELIVERY_FAILED
+}
+
+enum PaymentMethod {
+  CASH_ON_DELIVERY
+  ONLINE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum Role {
+  CUSTOMER
+  SHOP_OWNER
+  RIDER
+  ADMIN
+}
+
+enum TokenPurpose {
+  RESET_PASSWORD
+  VERIFY_EMAIL
+}

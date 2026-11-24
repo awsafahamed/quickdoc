@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 72" role="img" aria-label="QuickDoc">
+  <rect x="2" y="2" width="68" height="68" rx="16" fill="#2563EB"/>
+  <path d="M18 18h24l12 12v24H18z" fill="#fff"/>
+  <path d="M42 18v12h12z" fill="#BFDBFE"/>
+  <path d="M33 38l-8 12h7l-3 9 13-15h-8z" fill="#2563EB"/>
+  <text x="84" y="43" font-family="Segoe UI,Arial,sans-serif" font-size="34" font-weight="700" letter-spacing="-1"><tspan fill="#0B1F4B">Quick</tspan><tspan fill="#2563EB">Doc</tspan></text>
+</svg>
