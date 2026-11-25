@@ -1,0 +1,290 @@
+.sectionHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 30px;
+}
+
+.sectionHeading h2 {
+  margin: 0;
+  color: #26323d;
+  font-size: 16px;
+  letter-spacing: -0.02em;
+}
+
+.sectionHeading p {
+  max-width: 70ch;
+  margin: 6px 0 0;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.serviceEditor {
+  display: grid;
+  min-height: 420px;
+  grid-template-columns: minmax(210px, 0.7fr) minmax(0, 1.3fr);
+  margin-top: 14px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #e5e9ee;
+  border-radius: 11px;
+}
+
+.serviceList {
+  min-width: 0;
+  border-right: 1px solid #e5e9ee;
+}
+
+.serviceChoice {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 13px;
+  color: #17212b;
+  background: #fff;
+  border: 0;
+  border-bottom: 1px solid #edf0f3;
+  text-align: left;
+}
+
+.serviceChoice:hover {
+  background: #f8fafc;
+}
+
+.serviceChoice:focus-visible,
+.serviceForm input:focus-visible,
+.serviceForm textarea:focus-visible,
+.pricingRow input:focus-visible {
+  outline: 3px solid #155eef55;
+  outline-offset: 2px;
+}
+
+.serviceChoiceActive {
+  background: #edf4ff;
+}
+
+.serviceChoice > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.serviceChoice strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.serviceChoice small {
+  color: #667085;
+  font-size: 9px;
+}
+
+.enabled,
+.disabled {
+  flex: none;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.enabled {
+  color: #087443;
+  background: #ecfdf3;
+}
+
+.disabled {
+  color: #475467;
+  background: #f2f4f7;
+}
+
+.serviceForm {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 17px;
+}
+
+.formHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+
+.formHeading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.formHeading h3 {
+  margin: 0;
+  color: #26323d;
+  font-size: 14px;
+}
+
+.formHeading span {
+  color: #667085;
+  font-size: 10px;
+}
+
+.serviceForm > label,
+.inlineFields label {
+  display: grid;
+  gap: 6px;
+  color: #344054;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.serviceForm > label > span {
+  color: #667085;
+  font-weight: 400;
+}
+
+.serviceForm input:not([type='checkbox']),
+.serviceForm textarea,
+.pricingRow input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 9px;
+  color: #17212b;
+  background: #fff;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.serviceForm textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.inlineFields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.toggle {
+  display: flex !important;
+  align-items: center;
+  gap: 7px !important;
+  color: #344054;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #155eef;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.emptyList,
+.emptyEditor {
+  padding: 16px;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.emptyEditor {
+  align-self: center;
+}
+
+.pricingTable {
+  margin-top: 13px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #e5e9ee;
+  border-radius: 10px;
+}
+
+.pricingRow {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(110px, 180px) 55px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 13px;
+  border-bottom: 1px solid #edf0f3;
+}
+
+.pricingRow:last-child {
+  border-bottom: 0;
+}
+
+.pricingRow > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.pricingRow strong {
+  color: #344054;
+  font-size: 11px;
+}
+
+.pricingRow > div span {
+  color: #667085;
+  font-size: 9px;
+}
+
+.pricingRow input {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pricingRow button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+@media (max-width: 700px) {
+  .serviceEditor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .serviceList {
+    max-height: 245px;
+    overflow: auto;
+    border-right: 0;
+    border-bottom: 1px solid #e5e9ee;
+  }
+}
+
+@media (max-width: 480px) {
+  .sectionHeading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .formHeading {
+    flex-direction: column;
+  }
+
+  .pricingRow {
+    grid-template-columns: minmax(120px, 1fr) minmax(80px, 110px) 45px;
+    gap: 7px;
+    padding: 9px;
+  }
+}

@@ -28,6 +28,9 @@ model User {
   RiderProfile    RiderProfile?
   shop            Shop[]
   ShopStaff       ShopStaff[]
+  SupportTickets  SupportTicket[]        @relation("SupportTicketCustomer")
+  AssignedTickets SupportTicket[]        @relation("SupportTicketAssignee")
+  SupportMessages SupportTicketMessage[]
   UserRole        UserRole[]
   agentProfile    AgentProfile?
 }
@@ -182,6 +185,7 @@ model Order {
   OrderStatusHistory   OrderStatusHistory[]
   Payment              Payment?
   Review               Review?
+  SupportTickets       SupportTicket[]
 
   @@unique([customerId, clientKey])
   @@index([customerId, createdAt])
@@ -220,6 +224,26 @@ model AdminSetting {
   key       String   @id
   value     Json
   updatedAt DateTime
+}
+
+model PlatformCatalogService {
+  code               String   @id @db.VarChar(80)
+  name               String   @db.VarChar(160)
+  description        String   @db.VarChar(1000)
+  serviceFee         Decimal  @db.Decimal(12, 2)
+  estimatedDays      Int
+  enabled            Boolean  @default(true)
+  requiresOriginals  Boolean  @default(false)
+  requiredOriginals  String[] @default([])
+  supportingDocuments String[] @default([])
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model PlatformPricingRule {
+  key       String   @id @db.VarChar(80)
+  amount    Decimal  @db.Decimal(12, 4)
+  updatedAt DateTime @updatedAt
 }
 
 model AuditLog {
@@ -383,6 +407,43 @@ model Refund {
   Payment        Payment  @relation(fields: [paymentId], references: [id])
 
   @@index([paymentId])
+}
+
+model SupportTicket {
+  id             String                @id @db.Uuid
+  reference      String                @unique @db.VarChar(32)
+  customerId     String                @db.Uuid
+  orderId        String?               @db.Uuid
+  assignedAdminId String?              @db.Uuid
+  subject        String                @db.VarChar(160)
+  status         String                @default("OPEN") @db.VarChar(32)
+  priority       String                @default("NORMAL") @db.VarChar(16)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  resolvedAt     DateTime?
+  customer       User                  @relation("SupportTicketCustomer", fields: [customerId], references: [id])
+  assignedAdmin  User?                 @relation("SupportTicketAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  order          Order?                @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  messages       SupportTicketMessage[]
+
+  @@index([customerId, createdAt])
+  @@index([status, updatedAt])
+  @@index([assignedAdminId, status])
+  @@index([orderId])
+}
+
+model SupportTicketMessage {
+  id          String        @id @db.Uuid
+  ticketId    String        @db.Uuid
+  senderId    String        @db.Uuid
+  body        String        @db.VarChar(5000)
+  internalNote Boolean      @default(false)
+  createdAt   DateTime      @default(now())
+  ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  sender      User          @relation(fields: [senderId], references: [id])
+
+  @@index([ticketId, createdAt])
+  @@index([senderId, createdAt])
 }
 
 model Review {

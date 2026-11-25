@@ -1,8 +1,10 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { IsEmail, IsOptional, IsString, Length, IsNumber, Min, IsUUID, IsBoolean } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, Length, IsNumber, Min, IsUUID, IsBoolean, Max } from 'class-validator';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { PrintPricingService } from '../print/print-pricing.service';
+import { DeliverySpeed, PrintColour, PrintPaperSize, PrintSides } from '../print/print.types';
 
 class ProfileDto {
   @IsOptional()
@@ -64,8 +66,8 @@ class PrintOrderDto {
   @IsUUID()
   documentId!: string;
 
-  @IsString()
-  paperSize!: string;
+  @IsEnum(PrintPaperSize)
+  paperSize!: PrintPaperSize;
 
   @IsBoolean()
   colour!: boolean;
@@ -75,10 +77,12 @@ class PrintOrderDto {
 
   @IsNumber()
   @Min(1)
+  @Max(100)
   copies!: number;
 
   @IsNumber()
   @Min(1)
+  @Max(10000)
   printedSides!: number;
 
   @IsString()
@@ -95,7 +99,10 @@ class PrintOrderDto {
 @Controller('customer')
 @UseGuards(AuthGuard('jwt'))
 export class CustomerController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly printPricing: PrintPricingService,
+  ) {}
 
   @Get('me')
   async me(@Req() request: { user: { id: string } }) {
@@ -188,11 +195,24 @@ export class CustomerController {
     if (!shop) throw new BadRequestException('Shop is not eligible');
     if (!document) throw new BadRequestException('Document was not found');
     const pages = document.pageCount ?? dto.printedSides;
-    const printSubtotal = Number((pages * dto.copies * (dto.colour ? 1.5 : 0.5) * (dto.duplex ? 0.85 : 1)).toFixed(2));
-    const deliveryFee = 10;
-    const platformFee = 2;
+    if (pages < 1 || pages > 10000) throw new BadRequestException('Document page count is outside the printable range');
+    const quote = await this.printPricing.calculate({
+      pageCount: pages,
+      copies: dto.copies,
+      paperSize: dto.paperSize,
+      colour: dto.colour ? PrintColour.COLOUR : PrintColour.BLACK_WHITE,
+      sides: dto.duplex ? PrintSides.DUPLEX : PrintSides.SINGLE,
+      binding: false,
+      stapling: false,
+      lamination: false,
+      deliverySpeed: DeliverySpeed.STANDARD,
+      deliveryDistanceKm: 0,
+    });
+    const printSubtotal = quote.printing;
+    const deliveryFee = quote.delivery;
+    const platformFee = Number((quote.total - printSubtotal - deliveryFee).toFixed(2));
     const commission = Number((printSubtotal * 0.1).toFixed(2));
-    const total = Number((printSubtotal + deliveryFee + platformFee).toFixed(2));
+    const total = quote.total;
     const reference = `PR-${Date.now().toString().slice(-8)}`;
     const pin = randomBytes(3).toString('hex').toUpperCase();
     const pickupCode = randomBytes(3).toString('hex').toUpperCase();

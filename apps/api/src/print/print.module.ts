@@ -5,5 +5,6 @@ import { PrintPricingService } from './print-pricing.service';
 @Module({
   controllers: [PrintController],
   providers: [PrintPricingService],
+  exports: [PrintPricingService],
 })
 export class PrintModule {}

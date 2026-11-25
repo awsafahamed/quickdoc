@@ -7,9 +7,9 @@ export class PrintController {
   constructor(private readonly pricing: PrintPricingService) {}
 
   @Post('quote')
-  createQuote(@Body() request: PrintQuoteDto) {
+  async createQuote(@Body() request: PrintQuoteDto) {
     return {
-      data: this.pricing.calculate(request),
+      data: await this.pricing.calculate(request),
     };
   }
 }

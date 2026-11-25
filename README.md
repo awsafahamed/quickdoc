@@ -4,7 +4,7 @@ Foundation workspace for a multi-vendor print and document-attestation marketpla
 
 ## Workspace
 
-- `apps/api` — NestJS API boundary, health endpoint, Prisma schema and future domain modules.
+- `apps/api` — NestJS API, authenticated customer/partner/admin operations, and Prisma database schema.
 - `apps/customer-web` — Next.js customer-facing shell.
 - `packages/shared-types` — framework-independent contracts shared by web and API.
 - `docs` — product, architecture, data, workflow, security and delivery specifications.
@@ -48,6 +48,8 @@ Use `render.yaml` with a Render Blueprint. Set these secret/environment values i
 - `WEB_ORIGINS`: comma-separated production frontend origins
 - `NODE_ENV=production`
 
-The Blueprint builds from the workspace root, generates Prisma Client, and starts the API as a workspace package. Render supplies `PORT` automatically; local development can continue to use `API_PORT`.
+The Blueprint builds from the workspace root, generates Prisma Client, applies the additive Prisma migration in its pre-deploy command, and starts the API as a workspace package. The migration assumes the existing QuickDoc schema is already present; do not use it as a fresh-database baseline. Render supplies `PORT` automatically; local development can continue to use `API_PORT`.
 
 After the Render service is deployed, set `NEXT_PUBLIC_API_URL` in **all five Vercel frontend projects** (customer, shop, rider, agent and admin) to `https://<render-service>/api/v1`, then redeploy each project so the public variable is included in its build. Add all five production frontend origins to `WEB_ORIGINS` in Render so browser requests pass CORS checks.
+
+The super-admin finance view is read-only. PayHere refunds are not enabled until the provider's production endpoint and response/status semantics can be verified; do not treat a recorded payment as refunded based on an unverified response.

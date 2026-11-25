@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "jest --config test/jest.json --passWithNoTests",
     "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
     "prisma:validate": "prisma validate"
   },
   "dependencies": {

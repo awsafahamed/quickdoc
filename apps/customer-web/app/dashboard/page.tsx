@@ -1,6 +1,7 @@
 'use client';
 
 import { ChangeEvent, useEffect, useState } from 'react';
+import CustomerSupportPage from './support-page';
 
 type View = 'dashboard' | 'print' | 'attest' | 'orders' | 'documents' | 'addresses' | 'payments' | 'support' | 'profile';
 
@@ -87,6 +88,7 @@ export default function CustomerDashboardPage() {
   const [customerOrders, setCustomerOrders] = useState<Order[]>([]);
   const [documents, setDocuments] = useState<{ id: string; name: string; sizeBytes: number; pageCount: number | null; createdAt: string }[]>([]);
   const [addresses, setAddresses] = useState<{ id: string; label: string; line: string }[]>([]);
+  const [supportOrders, setSupportOrders] = useState<{ id: string; reference: string }[]>([]);
 
   useEffect(() => {
     const storedSession = window.localStorage.getItem('print-attest-session');
@@ -107,7 +109,10 @@ export default function CustomerDashboardPage() {
       const authHeaders = { Authorization: `Bearer ${accessToken}` };
       fetch(`${apiUrl}/customer/orders`, { headers: authHeaders })
         .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; createdAt: string; Shop: { name: string } }[] }> : Promise.reject())
-        .then((result) => setCustomerOrders(result.data.map((order) => ({ id: order.reference, type: 'Print & Deliver', detail: order.Shop?.name ?? 'Printing shop', status: order.status, tone: 'blue', date: new Date(order.createdAt).toLocaleDateString() }))))
+        .then((result) => {
+          setCustomerOrders(result.data.map((order) => ({ id: order.reference, type: 'Print & Deliver', detail: order.Shop?.name ?? 'Printing shop', status: order.status, tone: 'blue', date: new Date(order.createdAt).toLocaleDateString() })));
+          setSupportOrders(result.data.map(({ id, reference }) => ({ id, reference })));
+        })
         .catch(() => setCustomerOrders([]));
       fetch(`${apiUrl}/customer/documents`, { headers: authHeaders })
         .then((response) => response.ok ? response.json() as Promise<{ data: typeof documents }> : Promise.reject())
@@ -156,8 +161,9 @@ export default function CustomerDashboardPage() {
           {view === 'orders' && <SimplePage title="My orders" description="Every request, handover and delivery in one place.">{customerOrders.length ? <div className="panel">{customerOrders.map((order) => <OrderRow key={order.id} order={order} />)}</div> : <EmptyState title="No orders yet" text="Your active and completed requests will appear here." action="Start a request" onAction={() => goTo('print')} />}</SimplePage>}
           {view === 'documents' && <SimplePage title="My documents" description="Private files shared only with the services you approve.">{documents.length ? <div className="panel">{documents.map((document) => <div className="order-row" key={document.id}><div className="order-row__mark"><Icon name="file" /></div><div className="order-row__details"><strong>{document.name}</strong><span>{document.pageCount ? `${document.pageCount} pages · ` : ''}{Math.ceil(document.sizeBytes / 1024)} KB</span></div><button className="icon-button" type="button" aria-label={`Remove ${document.name}`} onClick={() => setDocuments((items) => items.filter((item) => item.id !== document.id))}>×</button></div>)}</div> : <div className="empty-panel"><span className="empty-panel__icon"><Icon name="file" /></span><h3>No saved documents yet</h3><p>Documents uploaded during an order will appear here with their access history.</p><button className="button button--primary" type="button" onClick={() => goTo('print')}><Icon name="plus" /> Start with a print request</button></div>}</SimplePage>}
           {view === 'addresses' && <AddressPage addresses={addresses} onChanged={setAddresses} />}
+          {view === 'support' && <CustomerSupportPage orders={supportOrders} />}
           {view === 'profile' && <ProfilePage session={session} onSave={(nextSession) => { setSession(nextSession); window.localStorage.setItem('print-attest-session', JSON.stringify(nextSession)); }} onLogout={() => { window.localStorage.removeItem('print-attest-session'); window.location.href = '/login'; }} />}
-          {view !== 'dashboard' && view !== 'print' && view !== 'attest' && view !== 'orders' && view !== 'documents' && view !== 'profile' && <SimplePage title={currentLabel} description="This workspace is ready for your account details."><div className="empty-panel"><span className="empty-panel__icon"><Icon name={navigation.find((item) => item.id === view)?.icon ?? 'user'} /></span><h3>Nothing to show yet</h3><p>Connect your customer account to manage this area securely.</p><button className="button button--secondary" type="button" onClick={() => goTo('support')}>Contact support <Icon name="arrow" /></button></div></SimplePage>}
+          {view !== 'dashboard' && view !== 'print' && view !== 'attest' && view !== 'orders' && view !== 'documents' && view !== 'addresses' && view !== 'support' && view !== 'profile' && <SimplePage title={currentLabel} description="This workspace is ready for your account details."><div className="empty-panel"><span className="empty-panel__icon"><Icon name={navigation.find((item) => item.id === view)?.icon ?? 'user'} /></span><h3>Nothing to show yet</h3><p>Connect your customer account to manage this area securely.</p><button className="button button--secondary" type="button" onClick={() => goTo('support')}>Contact support <Icon name="arrow" /></button></div></SimplePage>}
         </main>
       </div>
     </div>

@@ -7,14 +7,14 @@ export class AttestationController {
   constructor(private readonly catalogue: AttestationCatalogService) {}
 
   @Get('services')
-  listServices() {
-    return { data: this.catalogue.list() };
+  async listServices() {
+    return { data: await this.catalogue.list() };
   }
 
   @Post('quote')
-  createQuote(@Body() request: AttestationQuoteDto) {
+  async createQuote(@Body() request: AttestationQuoteDto) {
     return {
-      data: this.catalogue.quote(request.serviceId, request.pickupDistanceKm, request.returnDistanceKm, request.express),
+      data: await this.catalogue.quote(request.serviceId, request.pickupDistanceKm, request.returnDistanceKm, request.express),
     };
   }
 }
