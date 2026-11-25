@@ -1,5 +1,9 @@
 const bcrypt = require('bcryptjs');
+const path = require('path');
 const { Prisma, PrismaClient } = require('@prisma/client');
+
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '../../../.env') });
 
 const prisma = new PrismaClient();
 const variableNames = [

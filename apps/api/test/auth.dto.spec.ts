@@ -9,14 +9,14 @@ describe('registration role validation', () => {
     password: 'secure-password',
   };
 
-  it('accepts agent registration', async () => {
-    const dto = plainToInstance(RegisterDto, { ...credentials, role: 'AGENT' });
+  it('accepts the shared registration credentials without a role field', async () => {
+    const dto = plainToInstance(RegisterDto, credentials);
     await expect(validate(dto)).resolves.toHaveLength(0);
   });
 
-  it('rejects self-assigned administrator access', async () => {
+  it('does not expose role assignment on public registration credentials', async () => {
     const dto = plainToInstance(RegisterDto, { ...credentials, role: 'ADMIN' });
-    const errors = await validate(dto);
-    expect(errors.some((error) => error.property === 'role')).toBe(true);
+    await validate(dto, { whitelist: true });
+    expect('role' in dto).toBe(false);
   });
 });

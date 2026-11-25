@@ -1,6 +1,6 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { IsBoolean, IsNumber, IsOptional, IsString, Length, Min } from 'class-validator';
+import { IsBoolean, IsEmail, IsNumber, IsOptional, IsString, Length, Min } from 'class-validator';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PrivateObjectStorageService } from '../storage/private-object-storage.service';
@@ -27,9 +27,7 @@ class ShopServiceDto {
 }
 
 class StaffDto {
-  @IsString() name!: string;
-  @IsString() email!: string;
-  @IsString() role!: string;
+  @IsEmail() email!: string;
 }
 
 @Controller('shop/me')
@@ -93,20 +91,25 @@ export class ShopPortalController {
   async saveHours(@Req() req: { user: { id: string } }, @Body() dto: OpeningHourDto) {
     const shop = await this.shopForOwner(req.user.id);
     if (dto.dayOfWeek < 0 || dto.dayOfWeek > 6) throw new BadRequestException('dayOfWeek must be between 0 and 6');
-    return { data: await this.prisma.shopOpeningHour.upsert({ where: { shopId_dayOfWeek: { shopId: shop.id, dayOfWeek: dto.dayOfWeek } }, create: { shopId: shop.id, dayOfWeek: dto.dayOfWeek, opensAt: dto.opensAt, closesAt: dto.closesAt }, update: { opensAt: dto.opensAt, closesAt: dto.closesAt } }) };
+    return {     data: await this.prisma.shopOpeningHour.upsert({ where: { shopId_dayOfWeek: { shopId: shop.id, dayOfWeek: dto.dayOfWeek } }, create: { shopId: shop.id, dayOfWeek: dto.dayOfWeek, opensAt: dto.opensAt, closesAt: dto.closesAt, isClosed: dto.isClosed }, update: { opensAt: dto.opensAt, closesAt: dto.closesAt, isClosed: dto.isClosed } }) };
   }
 
   @Get('staff')
   async staff(@Req() req: { user: { id: string } }) {
     const shop = await this.shopForOwner(req.user.id);
-    return { data: await this.prisma.shopStaff.findMany({ where: { shopId: shop.id } }) };
+    return { data: await this.prisma.shopStaff.findMany({ where: { shopId: shop.id }, include: { User: { select: { id: true, name: true, email: true } } } }) };
   }
 
   @Post('staff')
   async addStaff(@Req() req: { user: { id: string } }, @Body() dto: StaffDto) {
     const shop = await this.shopForOwner(req.user.id);
-    const user = await this.prisma.user.upsert({ where: { email: dto.email.toLowerCase() }, create: { email: dto.email.toLowerCase(), name: dto.name, passwordHash: randomUUID() }, update: { name: dto.name } });
-    await this.prisma.userRole.upsert({ where: { userId_role: { userId: user.id, role: 'SHOP_OWNER' } }, create: { userId: user.id, role: 'SHOP_OWNER' }, update: {} });
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email.toLowerCase() },
+      include: { UserRole: true },
+    });
+    if (!user || !user.UserRole.some(({ role }) => role === 'SHOP_OWNER')) {
+      throw new BadRequestException('Staff members must register through the shop-owner flow first');
+    }
     return { data: await this.prisma.shopStaff.create({ data: { shopId: shop.id, userId: user.id } }) };
   }
 
@@ -120,7 +123,41 @@ export class ShopPortalController {
   @Get('orders')
   async orders(@Req() req: { user: { id: string } }) {
     const shop = await this.shopForOwner(req.user.id);
-    return { data: await this.prisma.order.findMany({ where: { shopId: shop.id }, include: { customer: true, OrderItem: { include: { Document: true } }, OrderStatusHistory: { orderBy: { createdAt: 'desc' } }, DeliveryAssignment: true, Payment: true }, orderBy: { createdAt: 'desc' } }) };
+    return {
+      data: await this.prisma.order.findMany({
+        where: { shopId: shop.id },
+        select: {
+          id: true,
+          reference: true,
+          status: true,
+          currency: true,
+          total: true,
+          createdAt: true,
+          updatedAt: true,
+          deliveryAddress: true,
+          instructions: true,
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              CustomerProfile: { select: { phone: true } },
+            },
+          },
+          OrderItem: {
+            include: {
+              Document: {
+                select: { id: true, name: true, mimeType: true, sizeBytes: true, pageCount: true },
+              },
+            },
+          },
+          OrderStatusHistory: { orderBy: { createdAt: 'desc' } },
+          DeliveryAssignment: { select: { id: true, riderId: true, earnings: true, updatedAt: true } },
+          Payment: { select: { status: true, method: true, amount: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    };
   }
   @Get('orders/:orderId/documents/:documentId/preview-url')
   async orderDocumentPreviewUrl(
@@ -137,8 +174,6 @@ export class ShopPortalController {
     if (!document) throw new BadRequestException('Document was not found for this shop order');
     return { data: { previewUrl: await this.storage.createPreviewUrl(document.objectKey, document.name) } };
   }
-
-
   @Post('orders/:id/transition')
   async transition(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: { status: 'ACCEPTED' | 'REJECTED' | 'PRINTING' | 'READY_FOR_PICKUP' | 'CANCELLED'; reason?: string }) {
     const shop = await this.shopForOwner(req.user.id);

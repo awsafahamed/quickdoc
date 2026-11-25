@@ -196,9 +196,9 @@ export default function AgentPortal() {
     setBusy(true);
     setError('');
     try {
-      const created = await apiRequest<AgentSession>('/auth/register', {
+      const created = await apiRequest<AgentSession>('/auth/register/agent', {
         method: 'POST',
-        body: { ...values, role: 'AGENT' },
+        body: values,
       });
       saveSession(created);
       setSession(created);

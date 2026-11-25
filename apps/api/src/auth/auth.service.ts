@@ -1,9 +1,12 @@
-import { Injectable, UnauthorizedException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import * as bcrypt from 'bcryptjs';
+import { OAuth2Client } from 'google-auth-library';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto, RegisterDto, ResetPasswordDto, ResetRequestDto, OtpRequestDto, OtpVerifyDto } from './auth.dto';
+
+export type RegistrationRole = 'CUSTOMER' | 'SHOP_OWNER' | 'RIDER' | 'AGENT';
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -13,7 +16,7 @@ function sha256(value: string): string {
 export class AuthService {
   constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService) {}
 
-  async register(dto: RegisterDto) {
+  async register(dto: RegisterDto, role: RegistrationRole = 'CUSTOMER') {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() } });
     if (existing) throw new ConflictException('An account already uses this email');
     const passwordHash = await bcrypt.hash(dto.password, 12);
@@ -25,13 +28,7 @@ export class AuthService {
         CustomerProfile: dto.phone ? { create: { phone: dto.phone } } : undefined,
         UserRole: {
           create: {
-            role: dto.role === 'SHOP_OWNER'
-              ? 'SHOP_OWNER'
-              : dto.role === 'RIDER'
-                ? 'RIDER'
-                : dto.role === 'AGENT'
-                  ? 'AGENT'
-                  : 'CUSTOMER',
+            role,
           },
         },
       },
@@ -61,13 +58,8 @@ export class AuthService {
     return { loggedOut: true };
   }
 
-  async resetRequest(dto: ResetRequestDto) {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() } });
-    if (user) {
-      const token = randomBytes(32).toString('hex');
-      await this.prisma.actionToken.create({ data: { id: randomUUID(), userId: user.id, tokenHash: sha256(token), purpose: 'RESET_PASSWORD', expiresAt: new Date(Date.now() + 30 * 60 * 1000) } });
-    }
-    return { accepted: true };
+  async resetRequest(_dto: ResetRequestDto) {
+    throw new ServiceUnavailableException('Password reset email delivery is not configured');
   }
 
   async resetPassword(dto: ResetPasswordDto) {
@@ -83,10 +75,8 @@ export class AuthService {
     return { passwordReset: true };
   }
 
-  async requestOtp(dto: OtpRequestDto) {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    await this.prisma.actionToken.create({ data: { id: randomUUID(), userId: (await this.findOrCreateOtpUser(dto.phone)).id, tokenHash: sha256(dto.phone + ':' + code), purpose: 'VERIFY_EMAIL', expiresAt: new Date(Date.now() + 5 * 60 * 1000) } });
-    return { accepted: true, developmentCode: process.env.NODE_ENV === 'development' ? code : undefined };
+  async requestOtp(_dto: OtpRequestDto) {
+    throw new ServiceUnavailableException('Phone verification delivery is not configured');
   }
 
   async verifyOtp(dto: OtpVerifyDto) {
@@ -97,6 +87,125 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { id: token.userId }, include: { UserRole: true } });
     if (!user) throw new UnauthorizedException('User not found');
     return this.issueSession(user.id, user.email, user.UserRole.map((role) => role.role));
+  }
+
+  createGoogleOAuthState() {
+    return randomBytes(32).toString('hex');
+  }
+
+  validateGoogleOAuthState(received: string, stored: string) {
+    const receivedBytes = Buffer.from(received);
+    const storedBytes = Buffer.from(stored);
+    return receivedBytes.length === storedBytes.length && timingSafeEqual(receivedBytes, storedBytes);
+  }
+
+  getGoogleAuthorizationUrl(state: string) {
+    const config = this.getGoogleOAuthConfig();
+    const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authorizationUrl.search = new URLSearchParams({
+      client_id: config.clientId,
+      redirect_uri: config.redirectUri,
+      response_type: 'code',
+      scope: 'openid email profile',
+      state,
+      prompt: 'select_account',
+    }).toString();
+    return authorizationUrl.toString();
+  }
+
+  async completeGoogleOAuth(code: string) {
+    const config = this.getGoogleOAuthConfig();
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        redirect_uri: config.redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+    if (!tokenResponse.ok) throw new UnauthorizedException('Google authorization code is invalid or expired');
+    const tokens = await tokenResponse.json() as { id_token?: string };
+    if (!tokens.id_token) throw new UnauthorizedException('Google did not return an identity token');
+
+    const ticket = await new OAuth2Client(config.clientId).verifyIdToken({
+      idToken: tokens.id_token,
+      audience: config.clientId,
+    });
+    const identity = ticket.getPayload();
+    if (!identity?.email || identity.email_verified !== true || !identity.sub) {
+      throw new UnauthorizedException('A verified Google email address is required');
+    }
+
+    const email = identity.email.toLowerCase();
+    const existingUser = await this.prisma.user.findUnique({ where: { email }, include: { UserRole: true } });
+    let user = existingUser;
+    if (!existingUser) {
+      user = await this.prisma.user.upsert({
+        where: { email },
+        update: {},
+        create: {
+          email,
+          name: identity.name || email,
+          passwordHash: await bcrypt.hash(randomBytes(32).toString('hex'), 12),
+          emailVerified: true,
+          CustomerProfile: { create: {} },
+          UserRole: { create: { role: 'CUSTOMER' } },
+        },
+        include: { UserRole: true },
+      });
+    } else if (!existingUser.emailVerified) {
+      user = await this.prisma.user.update({
+        where: { id: existingUser.id },
+        data: { emailVerified: true },
+        include: { UserRole: true },
+      });
+    }
+    if (!user) throw new UnauthorizedException('Google account could not be resolved');
+    if (user.suspended) throw new UnauthorizedException('This account is suspended');
+
+    const loginCode = randomBytes(32).toString('hex');
+    await this.prisma.actionToken.create({
+      data: {
+        id: randomUUID(),
+        userId: user.id,
+        tokenHash: sha256(loginCode),
+        purpose: 'OAUTH_LOGIN',
+        expiresAt: new Date(Date.now() + 60 * 1000),
+      },
+    });
+    return loginCode;
+  }
+
+  async exchangeGoogleLoginCode(code: string) {
+    const token = await this.prisma.actionToken.findUnique({ where: { tokenHash: sha256(code) } });
+    if (!token || token.purpose !== 'OAUTH_LOGIN' || token.usedAt || token.expiresAt <= new Date()) {
+      throw new UnauthorizedException('Google sign-in code is invalid or expired');
+    }
+
+    const consumed = await this.prisma.actionToken.updateMany({
+      where: { id: token.id, purpose: 'OAUTH_LOGIN', usedAt: null, expiresAt: { gt: new Date() } },
+      data: { usedAt: new Date() },
+    });
+    if (consumed.count !== 1) throw new UnauthorizedException('Google sign-in code is invalid or expired');
+
+    const user = await this.prisma.user.findUnique({ where: { id: token.userId }, include: { UserRole: true } });
+    if (!user || user.suspended) throw new UnauthorizedException('This account is unavailable');
+    return this.issueSession(user.id, user.email, user.UserRole.map((role) => role.role));
+  }
+
+  getGoogleLoginRedirect(loginCode: string) {
+    const redirect = new URL('/login', this.getCustomerWebOrigin());
+    redirect.searchParams.set('google_code', loginCode);
+    return redirect.toString();
+  }
+
+  getGoogleLoginErrorRedirect() {
+    const redirect = new URL('/login', this.getCustomerWebOrigin());
+    redirect.searchParams.set('google_error', 'sign_in_failed');
+    return redirect.toString();
   }
 
   private async findOrCreateOtpUser(phone: string) {
@@ -112,5 +221,26 @@ export class AuthService {
     const familyId = randomUUID();
     await this.prisma.refreshSession.create({ data: { id: randomUUID(), userId, tokenHash: sha256(refreshToken), familyId, expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) } });
     return { accessToken, refreshToken, expiresIn: 900, user: { id: userId, email, roles } };
+  }
+
+  private getGoogleOAuthConfig() {
+    const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    const redirectUri = process.env.GOOGLE_OAUTH_REDIRECT_URI;
+    if (!clientId || !clientSecret || (process.env.NODE_ENV === 'production' && !redirectUri)) {
+      throw new ServiceUnavailableException('Google sign-in is not configured');
+    }
+    return {
+      clientId,
+      clientSecret,
+      redirectUri: redirectUri ?? 'http://localhost:3001/api/v1/auth/oauth/google/callback',
+    };
+  }
+
+  private getCustomerWebOrigin() {
+    const origin = process.env.CUSTOMER_WEB_ORIGIN
+      ?? (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000');
+    if (!origin) throw new ServiceUnavailableException('Customer web origin is not configured');
+    return new URL(origin).origin;
   }
 }

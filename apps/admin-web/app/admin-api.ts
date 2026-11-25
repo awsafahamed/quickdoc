@@ -30,7 +30,11 @@ function routeFor(path: string) {
 async function request<T>(url: string, init: RequestInit) {
   let response: Response;
   try {
-    response = await fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store' });
+    const headers = new Headers(init.headers);
+    if (typeof init.body === 'string' && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+    response = await fetch(url, { ...init, headers, credentials: 'same-origin', cache: 'no-store' });
   } catch {
     throw new AdminApiError('Could not reach the admin API. Check your connection and try again.');
   }

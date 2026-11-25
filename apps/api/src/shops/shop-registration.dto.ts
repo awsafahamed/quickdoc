@@ -1,10 +1,7 @@
-import { IsEmail, IsOptional, IsString, IsUUID, IsNumber, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, IsNumber, MaxLength, MinLength } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ShopRegistrationDto {
-  @IsUUID()
-  ownerId!: string;
-
   @IsString()
   @MinLength(2)
   @MaxLength(120)

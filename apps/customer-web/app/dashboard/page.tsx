@@ -3,6 +3,7 @@
 import { ChangeEvent, useEffect, useState } from 'react';
 import CustomerSupportPage from './support-page';
 import PrintRequestFlow, { type PrintOrderSummary, type SavedDocument } from './print-request';
+import AttestationRequestFlow, { type AttestationBookingResult } from './attestation-request';
 
 type View = 'dashboard' | 'print' | 'attest' | 'orders' | 'documents' | 'addresses' | 'payments' | 'support' | 'profile';
 
@@ -124,10 +125,29 @@ export default function CustomerDashboardPage() {
       fetch(`${apiUrl}/customer/orders`, { headers: authHeaders })
         .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; createdAt: string; Shop: { name: string } }[] }> : Promise.reject())
         .then((result) => {
-          setCustomerOrders(result.data.map((order) => ({ id: order.reference, type: 'Print & Deliver', detail: order.Shop?.name ?? 'Printing shop', status: order.status, tone: 'blue', date: new Date(order.createdAt).toLocaleDateString() })));
+          setCustomerOrders((items) => [
+            ...result.data.map((order) => ({ id: order.reference, type: 'Print & Deliver', detail: order.Shop?.name ?? 'Printing shop', status: order.status, tone: 'blue' as const, date: new Date(order.createdAt).toLocaleDateString() })),
+            ...items.filter((order) => order.type === 'Attest & Return'),
+          ]);
           setSupportOrders(result.data.map(({ id, reference }) => ({ id, reference })));
         })
-        .catch(() => setCustomerOrders([]));
+        .catch(() => setCustomerOrders((items) => items.filter((order) => order.type === 'Attest & Return')));
+      fetch(`${apiUrl}/attestation/me/jobs`, { headers: authHeaders })
+        .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; serviceCode: string; createdAt: string; agent?: { businessName?: string } }[] }> : Promise.reject())
+        .then((result) => {
+          setCustomerOrders((items) => [
+            ...items.filter((order) => order.type === 'Print & Deliver'),
+            ...result.data.map((job) => ({
+              id: job.reference,
+              type: 'Attest & Return',
+              detail: [job.serviceCode, job.agent?.businessName].filter(Boolean).join(' · '),
+              status: job.status,
+              tone: 'green' as const,
+              date: new Date(job.createdAt).toLocaleDateString(),
+            })),
+          ]);
+        })
+        .catch(() => undefined);
       fetch(`${apiUrl}/customer/documents`, { headers: authHeaders })
         .then((response) => response.ok ? response.json() as Promise<{ data: typeof documents }> : Promise.reject())
         .then((result) => setDocuments(result.data))
@@ -198,7 +218,14 @@ export default function CustomerDashboardPage() {
             }}
             onBack={() => goTo('dashboard')}
           />}
-          {view === 'attest' && <RequestPage type="attest" uploadedFile={uploadedFile} onFileChange={(event) => setUploadedFile(event.target.files?.[0]?.name ?? null)} onClear={() => setUploadedFile(null)} goTo={goTo} />}
+          {view === 'attest' && <AttestationRequestFlow
+            onBooked={(booking: AttestationBookingResult) => {
+              const nextOrder: Order = { id: booking.reference, type: 'Attest & Return', detail: booking.agent.businessName, status: booking.status, tone: 'green', date: new Date().toLocaleDateString() };
+              setCustomerOrders((items) => [nextOrder, ...items.filter((item) => item.id !== nextOrder.id)]);
+            }}
+            onViewOrders={() => goTo('orders')}
+            onBack={() => goTo('dashboard')}
+          />}
           {view === 'orders' && <SimplePage title="My orders" description="Every request, handover and delivery in one place.">{customerOrders.length ? <div className="panel">{customerOrders.map((order) => <OrderRow key={order.id} order={order} />)}</div> : <EmptyState title="No orders yet" text="Your active and completed requests will appear here." action="Start a request" onAction={() => goTo('print')} />}</SimplePage>}
           {view === 'documents' && <DocumentLibrary documents={documents} onChanged={setDocuments} onStartPrint={() => goTo('print')} />}
           {view === 'addresses' && <AddressPage addresses={addresses} onChanged={setAddresses} />}
@@ -212,9 +239,11 @@ export default function CustomerDashboardPage() {
 }
 
 function Dashboard({ goTo, apiState, customerOrders, customerName }: { goTo: (view: View) => void; apiState: 'loading' | 'connected' | 'unavailable'; customerOrders: Order[]; customerName: string }) {
-  const currentHour = new Date().getHours();
-  const greeting = currentHour < 12 ? 'Good morning' : currentHour < 18 ? 'Good afternoon' : 'Good evening';
-  const today = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
+  useEffect(() => setCurrentTime(new Date()), []);
+  const currentHour = currentTime?.getHours();
+  const greeting = currentHour === undefined ? 'Welcome' : currentHour < 12 ? 'Good morning' : currentHour < 18 ? 'Good afternoon' : 'Good evening';
+  const today = currentTime?.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) ?? '';
   return (
     <>
       <section className="welcome-row"><div><p className="date-label">{today}</p><h1>{greeting}, {customerName}.</h1><p className="welcome-copy">What do you need to get done today?</p></div></section>

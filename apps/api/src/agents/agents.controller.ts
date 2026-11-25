@@ -98,10 +98,10 @@ class AgentServicesDto {
 type AuthenticatedRequest = { user: { id: string; roles: string[] } };
 
 const nextStatus = {
-  RECEIVED: { from: 'COLLECTED', to: 'AGENT_RECEIVED' },
-  PROCESSING: { from: 'AGENT_RECEIVED', to: 'PROCESSING' },
-  ATTESTED: { from: 'PROCESSING', to: 'ATTESTED' },
-  RETURN_READY: { from: 'ATTESTED', to: 'RETURN_READY' },
+  RECEIVED: { from: ['PICKUP_SCHEDULED', 'COLLECTED'], to: 'AGENT_RECEIVED' },
+  PROCESSING: { from: ['AGENT_RECEIVED'], to: 'PROCESSING' },
+  ATTESTED: { from: ['PROCESSING'], to: 'ATTESTED' },
+  RETURN_READY: { from: ['ATTESTED'], to: 'RETURN_READY' },
 } as const;
 
 @Controller('agents')
@@ -227,9 +227,9 @@ export class AgentsController {
     if (!job) throw new NotFoundException('This job was not found');
 
     const transition = nextStatus[dto.eventType];
-    if (job.status !== transition.from) {
+    if (!transition.from.some((status) => status === job.status)) {
       throw new BadRequestException(
-        `This job must be ${transition.from.toLowerCase().replaceAll('_', ' ')} before this update`,
+        `This job must be ${transition.from[0].toLowerCase().replaceAll('_', ' ')} before this update`,
       );
     }
 

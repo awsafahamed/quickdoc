@@ -14,3 +14,11 @@ services:
         generateValue: true
       - key: WEB_ORIGINS
         sync: false
+      - key: CUSTOMER_WEB_ORIGIN
+        value: https://customer-web-murex-seven.vercel.app
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        value: https://quickdoc-tfwuf.onrender.com/api/v1/auth/oauth/google/callback

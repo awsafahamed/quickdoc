@@ -34,6 +34,7 @@ export default function RiderPortal() {
   const [online, setOnline] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [availabilityError, setAvailabilityError] = useState('');
+  const [updatingAvailability, setUpdatingAvailability] = useState(false);
 
   useEffect(() => {
     const token = window.sessionStorage.getItem('rider-access-token');
@@ -60,6 +61,7 @@ export default function RiderPortal() {
   }, []);
 
   const toggleAvailability = async () => {
+    if (updatingAvailability) return;
     const token = window.sessionStorage.getItem('rider-access-token');
     if (!token) {
       setAvailabilityError('Sign in again to update your availability.');
@@ -67,6 +69,7 @@ export default function RiderPortal() {
     }
     setAvailabilityError('');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+    setUpdatingAvailability(true);
     try {
       const response = await fetch(`${apiUrl}/riders/availability`, {
         method: 'POST',
@@ -78,6 +81,8 @@ export default function RiderPortal() {
       setOnline(result.data.online);
     } catch (caught) {
       setAvailabilityError(caught instanceof TypeError ? 'Availability service is unavailable. Please try again.' : caught instanceof Error ? caught.message : 'Availability could not be updated.');
+    } finally {
+      setUpdatingAvailability(false);
     }
   };
 
@@ -103,7 +108,7 @@ export default function RiderPortal() {
         <button className="rider-profile" type="button" onClick={() => setView('profile')}><span className="rider-avatar">RK</span><span><strong>Rider account</strong>        <small>Rider account</small></span></button>
       </aside>
       <main className="rider-main">
-        <header className="topbar"><button className="rider-menu" type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><span /><span /><span /></button><div className="breadcrumb"><span>Rider workspace</span><b>›</b><strong>{nav.find((item) => item.id === view)?.label ?? 'My profile'}</strong></div><div className="topbar__actions"><button className="notification-button" type="button" aria-label="Notifications"><Icon name="bell" /><span /></button><button className="availability-button" type="button" aria-pressed={online} disabled={profile.status !== 'APPROVED' && !online} onClick={toggleAvailability}><i className={online ? 'online' : ''} />{online ? 'Online' : profile.status === 'APPROVED' ? 'Offline' : 'Pending approval'}</button></div></header>
+        <header className="topbar"><button className="rider-menu" type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><span /><span /><span /></button><div className="breadcrumb"><span>Rider workspace</span><b>›</b><strong>{nav.find((item) => item.id === view)?.label ?? 'My profile'}</strong></div><div className="topbar__actions"><button className="notification-button" type="button" aria-label="Notifications"><Icon name="bell" /><span /></button><button className="availability-button" type="button" aria-pressed={online} disabled={updatingAvailability || (profile.status !== 'APPROVED' && !online)} onClick={toggleAvailability}><i className={online ? 'online' : ''} />{updatingAvailability ? 'Updating…' : online ? 'Online' : profile.status === 'APPROVED' ? 'Offline' : 'Pending approval'}</button></div></header>
         {availabilityError && <p className="registration-error" role="alert">{availabilityError}</p>}
         {view === 'dashboard' && <Dashboard online={online} status={profile.status} onToggleOnline={toggleAvailability} />}
         {view === 'requests' && <RequestsPage />}
@@ -124,46 +129,56 @@ function RiderRegistration({ initialError, onRegistered }: { initialError: strin
   const [password, setPassword] = useState('');
   const [vehicle, setVehicle] = useState('BIKE');
   const [error, setError] = useState(initialError);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => setError(initialError), [initialError]);
 
   return (
     <main className="rider-registration">
       <section className="rider-registration-copy"><span className="registration-mark">P</span><p>RIDER PORTAL</p><h1>Make every delivery count.</h1><p>Complete verification to receive print and attestation delivery requests.</p></section>
-      <section className="rider-registration-panel"><div className="rider-auth-tabs"><button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); }}>Create account</button><button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); }}>Log in</button></div><p className="step-label">{mode === 'register' ? 'Rider registration' : 'Rider account access'}</p><h2>{mode === 'register' ? 'Create your rider account' : 'Welcome back'}</h2><form onSubmit={(event) => { event.preventDefault(); }}>
-        {mode === 'register' && <label>Full name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your full name" /></label>}
-        <label>Email address<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="rider@quickdoc.lk" /></label>
-        <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" /></label>
-        {mode === 'register' && <><label>Phone number<div className="phone-field"><span>🇱🇰 +94</span><input value={phone.replace('+94', '')} onChange={(event) => setPhone('+94' + event.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="70 123 4567" /></div></label><label>Vehicle tier<select value={vehicle} onChange={(event) => setVehicle(event.target.value)}><option value="BIKE">Flash Bike</option><option value="TUK">Flash Tuk</option><option value="CAR">Flash XL Car</option></select></label></>}
-        {error && <p className="registration-error" role="alert">{error}</p>}
-        <button type="button" onClick={async () => {
-          if (!email || password.length < 8) { setError('Enter your email and an 8-character password.'); return; }
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
-          try {
-            if (mode === 'login') {
-              const response = await fetch(`${apiUrl}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), password }) });
-              if (!response.ok) { setError(response.status === 401 ? 'Email or password is incorrect.' : 'Sign-in service is unavailable. Please try again.'); return; }
-              const result = await response.json() as { data: { accessToken: string; refreshToken: string } };
-              const profileResponse = await fetch(`${apiUrl}/riders/me`, { headers: { Authorization: `Bearer ${result.data.accessToken}` } });
-              if (!profileResponse.ok) { setError('This account does not have a rider profile. Create a rider account to apply.'); return; }
-              const profileResult = await profileResponse.json() as { data: RiderProfile };
-              window.sessionStorage.setItem('rider-access-token', result.data.accessToken);
-              onRegistered(profileResult.data);
-              return;
-            }
-            if (!name) { setError('Enter your full name.'); return; }
-            const response = await fetch(`${apiUrl}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), email: email.trim(), password, phone: phone.trim(), role: 'RIDER' }) });
-            if (!response.ok) { setError(response.status === 409 ? 'This email is already in use.' : 'Registration service is unavailable. Please try again.'); return; }
-            const result = await response.json() as { data: { accessToken: string; refreshToken: string } };
-            const profileResponse = await fetch(`${apiUrl}/riders/register`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${result.data.accessToken}` }, body: JSON.stringify({ phone: phone.trim(), vehicleType: vehicle }) });
-            if (!profileResponse.ok) { setError('Your account was created, but the rider application could not be saved. Please sign in and retry.'); return; }
+      <section className="rider-registration-panel"><div className="rider-auth-tabs"><button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); }}>Create account</button><button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); }}>Log in</button></div><p className="step-label">{mode === 'register' ? 'Rider registration' : 'Rider account access'}</p><h2>{mode === 'register' ? 'Create your rider account' : 'Welcome back'}</h2><form onSubmit={async (event) => {
+        event.preventDefault();
+        if (password.length < 8) { setError('Enter an 8-character password.'); return; }
+        if (mode === 'register' && !/^\+94[0-9]{9}$/.test(phone)) { setError('Enter a valid Sri Lanka mobile number.'); return; }
+        setSubmitting(true);
+        setError('');
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+        try {
+          if (mode === 'login') {
+            const response = await fetch(`${apiUrl}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), password }) });
+            if (!response.ok) { setError(response.status === 401 ? 'Email or password is incorrect.' : 'Sign-in service is unavailable. Please try again.'); return; }
+            const result = await response.json() as { data: { accessToken: string; refreshToken: string; user: { roles: string[] } } };
+            if (!result.data.user.roles.includes('RIDER')) { setError('This account does not have a rider profile. Create a rider account to apply.'); return; }
+            const profileResponse = await fetch(`${apiUrl}/riders/me`, { headers: { Authorization: `Bearer ${result.data.accessToken}` } });
+            if (!profileResponse.ok) { setError(profileResponse.status === 404 ? 'Complete your rider application before signing in.' : 'Your rider profile could not be verified. Please try again.'); return; }
             const profileResult = await profileResponse.json() as { data: RiderProfile };
             window.sessionStorage.setItem('rider-access-token', result.data.accessToken);
+            window.localStorage.setItem('rider-refresh-token', result.data.refreshToken);
             onRegistered(profileResult.data);
-          } catch (caught) {
-            setError(caught instanceof TypeError ? 'The rider service is unavailable. Please try again.' : 'The rider account could not be verified. Please try again.');
+            return;
           }
-        }}>{mode === 'register' ? 'Create rider account' : 'Sign in'}</button>
+          if (!name.trim()) { setError('Enter your full name.'); return; }
+          const response = await fetch(`${apiUrl}/auth/register/rider`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), email: email.trim(), password, phone: phone.trim() }) });
+          if (!response.ok) { setError(response.status === 409 ? 'This email is already in use.' : 'Registration service is unavailable. Please try again.'); return; }
+          const result = await response.json() as { data: { accessToken: string; refreshToken: string } };
+          const profileResponse = await fetch(`${apiUrl}/riders/register`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${result.data.accessToken}` }, body: JSON.stringify({ phone: phone.trim(), vehicleType: vehicle }) });
+          if (!profileResponse.ok) { setError('Your account was created, but the rider application could not be saved. Please sign in and retry.'); return; }
+          const profileResult = await profileResponse.json() as { data: RiderProfile };
+          window.sessionStorage.setItem('rider-access-token', result.data.accessToken);
+          window.localStorage.setItem('rider-refresh-token', result.data.refreshToken);
+          onRegistered(profileResult.data);
+        } catch (caught) {
+          setError(caught instanceof TypeError ? 'The rider service is unavailable. Please try again.' : 'The rider account could not be verified. Please try again.');
+        } finally {
+          setSubmitting(false);
+        }
+      }}>
+        {mode === 'register' && <label>Full name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Your full name" /></label>}
+        <label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="rider@quickdoc.lk" /></label>
+        <label>Password<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" /></label>
+        {mode === 'register' && <><label>Phone number<div className="phone-field"><span>🇱🇰 +94</span><input required value={phone.replace('+94', '')} onChange={(event) => setPhone('+94' + event.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="70 123 4567" /></div></label><label>Vehicle tier<select value={vehicle} onChange={(event) => setVehicle(event.target.value)}><option value="BIKE">Flash Bike</option><option value="TUK">Flash Tuk</option><option value="CAR">Flash XL Car</option></select></label></>}
+        {error && <p className="registration-error" role="alert">{error}</p>}
+        <button type="submit" disabled={submitting}>{submitting ? 'Please wait…' : mode === 'register' ? 'Create rider account' : 'Sign in'}</button>
         <p className="registration-note">Applications require review before a rider can go online or receive work.</p>
       </form></section>
     </main>

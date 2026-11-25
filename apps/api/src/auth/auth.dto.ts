@@ -1,4 +1,4 @@
-import { IsEmail, IsIn, IsOptional, IsString, Length } from 'class-validator';
+import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail()
@@ -16,10 +16,6 @@ export class RegisterDto {
   @IsString()
   phone?: string;
 
-  @IsOptional()
-  @IsString()
-  @IsIn(['CUSTOMER', 'SHOP_OWNER', 'RIDER', 'AGENT'])
-  role?: 'CUSTOMER' | 'SHOP_OWNER' | 'RIDER' | 'AGENT';
 }
 
 export class LoginDto {
@@ -46,6 +42,12 @@ export class OtpVerifyDto extends OtpRequestDto {
 export class RefreshDto {
   @IsString()
   refreshToken!: string;
+}
+
+export class GoogleExchangeDto {
+  @IsString()
+  @Length(64, 64)
+  code!: string;
 }
 
 export class ResetRequestDto {

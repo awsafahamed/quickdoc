@@ -74,6 +74,12 @@ model AttestationJob {
   status           String        @default("PICKUP_SCHEDULED")
   pickupAddress    Json
   returnAddress    Json
+  pickupScheduledAt DateTime?
+  pickupSlot       String?
+  quotedTotal      Decimal?      @db.Decimal(12, 2)
+  currency         String        @default("LKR")
+  express          Boolean       @default(false)
+  pricingSnapshot  Json?
   estimatedReadyAt DateTime?
   completedAt      DateTime?
   createdAt        DateTime      @default(now())
@@ -117,6 +123,7 @@ model Shop {
   owner        User              @relation(fields: [ownerId], references: [id])
   openingHours ShopOpeningHour[]
   ShopPrice    ShopPrice[]
+  inventory    ShopInventoryItem[]
   services     ShopService[]
   staff        ShopStaff[]
 
@@ -149,9 +156,25 @@ model ShopOpeningHour {
   dayOfWeek Int
   opensAt   String
   closesAt  String
+  isClosed  Boolean @default(false)
   shop      Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@id([shopId, dayOfWeek])
+}
+
+model ShopInventoryItem {
+  id           String   @id @db.Uuid
+  shopId       String   @db.Uuid
+  name         String   @db.VarChar(120)
+  category     String   @db.VarChar(60)
+  unit         String   @db.VarChar(24)
+  quantity     Decimal  @db.Decimal(12, 2)
+  reorderLevel Decimal  @db.Decimal(12, 2)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, updatedAt])
 }
 
 model Order {
@@ -573,4 +596,5 @@ enum Role {
 enum TokenPurpose {
   RESET_PASSWORD
   VERIFY_EMAIL
+  OAUTH_LOGIN
 }
