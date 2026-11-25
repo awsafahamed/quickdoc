@@ -3,7 +3,7 @@ services:
     name: quickdoc-api
     runtime: node
     buildCommand: npm ci && npm run db:generate && npm --workspace apps/api run build
-    preDeployCommand: npm --workspace apps/api run prisma:migrate
+    preDeployCommand: npm --workspace apps/api run prisma:migrate && node apps/api/scripts/bootstrap-admin.cjs
     startCommand: npm --workspace apps/api run start
     healthCheckPath: /api/v1/health
     envVars:
