@@ -11,3 +11,5 @@
 | Audit and platform settings | - | - | - | - | Restricted | Full |
 
 Authorization must combine role checks with resource ownership, partner assignment and explicit permissions. Admin overrides require a reason and audit event.
+
+Rider identity is taken from the authenticated session, never a request-supplied rider ID. Rider applications remain pending until an administrator approves them; approval changes are audited and non-approved riders cannot go online, view assignments or update delivery status.

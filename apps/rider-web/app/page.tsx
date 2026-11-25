@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 type RiderView = 'dashboard' | 'requests' | 'active' | 'history' | 'earnings' | 'profile';
+type RiderProfile = { status: string; RiderAvailability?: { online: boolean } | null };
 
 const nav: { id: RiderView; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'grid' },
@@ -26,19 +27,69 @@ function Icon({ name }: { name: string }) {
 }
 
 export default function RiderPortal() {
-  const [registered, setRegistered] = useState(false);
+  const [profile, setProfile] = useState<RiderProfile | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [sessionError, setSessionError] = useState('');
   const [view, setView] = useState<RiderView>('dashboard');
   const [online, setOnline] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState('');
 
   useEffect(() => {
-    setRegistered(window.localStorage.getItem('rider-registered') === 'true');
+    const token = window.sessionStorage.getItem('rider-access-token');
+    if (!token) {
+      setCheckingSession(false);
+      return;
+    }
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+    fetch(`${apiUrl}/riders/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Rider session could not be verified.');
+        return response.json() as Promise<{ data: RiderProfile }>;
+      })
+      .then((result) => {
+        setProfile(result.data);
+        setOnline(result.data.RiderAvailability?.online ?? false);
+      })
+      .catch(() => {
+        window.sessionStorage.removeItem('rider-access-token');
+        window.localStorage.removeItem('rider-refresh-token');
+        setSessionError('Could not verify your rider account. Please sign in again.');
+      })
+      .finally(() => setCheckingSession(false));
   }, []);
 
-  if (!registered) {
-    return <RiderRegistration onRegistered={() => {
-      window.localStorage.setItem('rider-registered', 'true');
-      setRegistered(true);
+  const toggleAvailability = async () => {
+    const token = window.sessionStorage.getItem('rider-access-token');
+    if (!token) {
+      setAvailabilityError('Sign in again to update your availability.');
+      return;
+    }
+    setAvailabilityError('');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+    try {
+      const response = await fetch(`${apiUrl}/riders/availability`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ online: !online }),
+      });
+      if (!response.ok) throw new Error(response.status === 403 ? 'Rider approval is required before going online.' : 'Availability could not be updated.');
+      const result = await response.json() as { data: { online: boolean } };
+      setOnline(result.data.online);
+    } catch (caught) {
+      setAvailabilityError(caught instanceof TypeError ? 'Availability service is unavailable. Please try again.' : caught instanceof Error ? caught.message : 'Availability could not be updated.');
+    }
+  };
+
+  if (checkingSession) {
+    return <main className="rider-registration"><p>Checking your rider account…</p></main>;
+  }
+
+  if (!profile) {
+    return <RiderRegistration initialError={sessionError} onRegistered={(nextProfile) => {
+      setProfile(nextProfile);
+      setOnline(nextProfile.RiderAvailability?.online ?? false);
+      setSessionError('');
     }} />;
   }
 
@@ -52,8 +103,9 @@ export default function RiderPortal() {
         <button className="rider-profile" type="button" onClick={() => setView('profile')}><span className="rider-avatar">RK</span><span><strong>Rider account</strong>        <small>Rider account</small></span></button>
       </aside>
       <main className="rider-main">
-        <header className="topbar"><button className="rider-menu" type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><span /><span /><span /></button><div className="breadcrumb"><span>Rider workspace</span><b>›</b><strong>{nav.find((item) => item.id === view)?.label ?? 'My profile'}</strong></div><div className="topbar__actions"><button className="notification-button" type="button" aria-label="Notifications"><Icon name="bell" /><span /></button><button className="availability-button" type="button" aria-pressed={online} onClick={() => setOnline((value) => !value)}><i className={online ? 'online' : ''} />{online ? 'Online' : 'Offline'}</button></div></header>
-        {view === 'dashboard' && <Dashboard online={online} setOnline={setOnline} setView={setView} />}
+        <header className="topbar"><button className="rider-menu" type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><span /><span /><span /></button><div className="breadcrumb"><span>Rider workspace</span><b>›</b><strong>{nav.find((item) => item.id === view)?.label ?? 'My profile'}</strong></div><div className="topbar__actions"><button className="notification-button" type="button" aria-label="Notifications"><Icon name="bell" /><span /></button><button className="availability-button" type="button" aria-pressed={online} disabled={profile.status !== 'APPROVED' && !online} onClick={toggleAvailability}><i className={online ? 'online' : ''} />{online ? 'Online' : profile.status === 'APPROVED' ? 'Offline' : 'Pending approval'}</button></div></header>
+        {availabilityError && <p className="registration-error" role="alert">{availabilityError}</p>}
+        {view === 'dashboard' && <Dashboard online={online} status={profile.status} onToggleOnline={toggleAvailability} />}
         {view === 'requests' && <RequestsPage />}
         {view === 'active' && <ActiveDeliveryPage />}
         {view === 'history' && <SimplePage title="Delivery history" empty="Completed and cancelled deliveries will appear here." />}
@@ -64,14 +116,16 @@ export default function RiderPortal() {
   );
 }
 
-function RiderRegistration({ onRegistered }: { onRegistered: () => void }) {
+function RiderRegistration({ initialError, onRegistered }: { initialError: string; onRegistered: (profile: RiderProfile) => void }) {
   const [mode, setMode] = useState<'register' | 'login'>('register');
   const [phone, setPhone] = useState('+94');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [vehicle, setVehicle] = useState('BIKE');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialError);
+
+  useEffect(() => setError(initialError), [initialError]);
 
   return (
     <main className="rider-registration">
@@ -85,50 +139,59 @@ function RiderRegistration({ onRegistered }: { onRegistered: () => void }) {
         <button type="button" onClick={async () => {
           if (!email || password.length < 8) { setError('Enter your email and an 8-character password.'); return; }
           const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
-          if (mode === 'login') {
-            const response = await fetch(`${apiUrl}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), password }) });
-            if (!response.ok) { setError('Email or password is incorrect.'); return; }
+          try {
+            if (mode === 'login') {
+              const response = await fetch(`${apiUrl}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), password }) });
+              if (!response.ok) { setError(response.status === 401 ? 'Email or password is incorrect.' : 'Sign-in service is unavailable. Please try again.'); return; }
+              const result = await response.json() as { data: { accessToken: string; refreshToken: string } };
+              const profileResponse = await fetch(`${apiUrl}/riders/me`, { headers: { Authorization: `Bearer ${result.data.accessToken}` } });
+              if (!profileResponse.ok) { setError('This account does not have a rider profile. Create a rider account to apply.'); return; }
+              const profileResult = await profileResponse.json() as { data: RiderProfile };
+              window.sessionStorage.setItem('rider-access-token', result.data.accessToken);
+              onRegistered(profileResult.data);
+              return;
+            }
+            if (!name) { setError('Enter your full name.'); return; }
+            const response = await fetch(`${apiUrl}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), email: email.trim(), password, phone: phone.trim(), role: 'RIDER' }) });
+            if (!response.ok) { setError(response.status === 409 ? 'This email is already in use.' : 'Registration service is unavailable. Please try again.'); return; }
             const result = await response.json() as { data: { accessToken: string; refreshToken: string } };
+            const profileResponse = await fetch(`${apiUrl}/riders/register`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${result.data.accessToken}` }, body: JSON.stringify({ phone: phone.trim(), vehicleType: vehicle }) });
+            if (!profileResponse.ok) { setError('Your account was created, but the rider application could not be saved. Please sign in and retry.'); return; }
+            const profileResult = await profileResponse.json() as { data: RiderProfile };
             window.sessionStorage.setItem('rider-access-token', result.data.accessToken);
-            window.localStorage.setItem('rider-refresh-token', result.data.refreshToken);
-            window.localStorage.setItem('rider-registered', 'true');
-            onRegistered();
-            return;
+            onRegistered(profileResult.data);
+          } catch (caught) {
+            setError(caught instanceof TypeError ? 'The rider service is unavailable. Please try again.' : 'The rider account could not be verified. Please try again.');
           }
-          if (!name) { setError('Enter your full name.'); return; }
-          const response = await fetch(`${apiUrl}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), email: email.trim(), password, phone: phone.trim(), role: 'RIDER' }) });
-          if (!response.ok) { setError('Registration failed. This email may already be in use.'); return; }
-          const result = await response.json() as { data: { accessToken: string; refreshToken: string } };
-          window.sessionStorage.setItem('rider-access-token', result.data.accessToken);
-          window.localStorage.setItem('rider-refresh-token', result.data.refreshToken);
-          await fetch(`${apiUrl}/riders/register`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${result.data.accessToken}` }, body: JSON.stringify({ phone: phone.trim(), vehicleType: vehicle }) });
-          onRegistered();
-        }}>Create rider account</button>
-        <p className="registration-note">Your account can receive assignments after activation.</p>
+        }}>{mode === 'register' ? 'Create rider account' : 'Sign in'}</button>
+        <p className="registration-note">Applications require review before a rider can go online or receive work.</p>
       </form></section>
     </main>
   );
 }
 
-function Dashboard({ online, setOnline, setView }: { online: boolean; setOnline: (value: boolean | ((current: boolean) => boolean)) => void; setView: (view: RiderView) => void }) {
-  return <section className="rider-content"><div className="shop-heading"><div><p>Today</p><h1>Good morning, Rider.</h1></div><button className="availability-card" type="button" aria-pressed={online} onClick={() => setOnline((value) => !value)}><i className={online ? 'online' : ''} /><span><strong>{online ? 'You are online' : 'You are offline'}</strong><small>{online ? 'Ready for requests' : 'Turn on to receive work'}</small></span></button></div><div className="rider-dashboard-grid"><article className="rider-status-card"><span>Account</span><strong>Active</strong><p>Your rider account is ready for assignments.</p></article><article className="rider-empty-card"><span className="production-icon">◫</span><div><strong>No active delivery</strong><p>Accepted deliveries will appear here.</p></div></article></div></section>;
+function Dashboard({ online, status, onToggleOnline }: { online: boolean; status: string; onToggleOnline: () => void }) {
+  const statusLabel = status === 'APPROVED' ? 'Approved' : status === 'REJECTED' ? 'Not approved' : status === 'SUSPENDED' ? 'Suspended' : 'Pending review';
+  return <section className="rider-content"><div className="shop-heading"><div><p>Today</p><h1>Rider workspace</h1></div><button className="availability-card" type="button" aria-pressed={online} disabled={status !== 'APPROVED' && !online} onClick={onToggleOnline}><i className={online ? 'online' : ''} /><span><strong>{online ? 'You are online' : status === 'APPROVED' ? 'You are offline' : statusLabel}</strong><small>{online ? 'Availability is active' : status === 'APPROVED' ? 'Turn on to receive work' : 'Review is required before receiving work'}</small></span></button></div><div className="rider-dashboard-grid"><article className="rider-status-card"><span>Application status</span><strong>{statusLabel}</strong><p>{status === 'APPROVED' ? 'Your account is approved. Availability controls whether you can receive work.' : 'Your application must be reviewed before you can receive assignments.'}</p></article><article className="rider-empty-card"><span className="production-icon">◫</span><div><strong>No active delivery</strong><p>Assigned deliveries will appear here after approval.</p></div></article></div></section>;
 }
 
 function RequestsPage() {
   const [assignments, setAssignments] = useState<{ id: string; earnings: number; Order: { reference: string; status: string } }[]>([]);
+  const [error, setError] = useState('');
   useEffect(() => {
     const token = window.sessionStorage.getItem('rider-access-token');
-    if (!token) return;
+    if (!token) { setError('Sign in to load delivery requests.'); return; }
     const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
-    fetch(`${apiUrl}/riders/me`, { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.ok ? response.json() as Promise<{ data: { userId: string } }> : Promise.reject()).then((profile) => fetch(`${apiUrl}/riders/${profile.data.userId}/assignments`, { headers: { Authorization: `Bearer ${token}` } })).then((response) => response?.ok ? response.json() as Promise<{ data: typeof assignments }> : Promise.reject()).then((result) => setAssignments(result.data)).catch(() => setAssignments([]));
+    fetch(`${apiUrl}/riders/me/assignments`, { headers: { Authorization: `Bearer ${token}` } }).then(async (response) => {
+      if (!response.ok) throw new Error(response.status === 403 ? 'Approved rider status is required to view assignments.' : 'Delivery requests could not be loaded.');
+      return response.json() as Promise<{ data: typeof assignments }>;
+    }).then((result) => setAssignments(result.data)).catch((caught: unknown) => setError(caught instanceof TypeError ? 'Delivery service is unavailable. Please try again.' : caught instanceof Error ? caught.message : 'Delivery requests could not be loaded.'));
   }, []);
-  return <section className="rider-content"><div className="shop-heading"><div><p>Available work</p><h1>Delivery requests</h1></div></div>{assignments.length ? <div className="delivery-list">{assignments.map((assignment) => <article className="delivery-request" key={assignment.id}><div><strong>{assignment.Order?.reference ?? assignment.id}</strong><p>Shared print or attestation delivery</p></div><span>LKR {Number(assignment.earnings).toFixed(2)}</span></article>)}</div> : <div className="empty-workspace"><h2>No delivery requests</h2><p>Eligible assignments appear when you are approved and online.</p></div>}</section>;
+  return <section className="rider-content"><div className="shop-heading"><div><p>Available work</p><h1>Delivery requests</h1></div></div>{error && <p className="registration-error" role="alert">{error}</p>}{assignments.length ? <div className="delivery-list">{assignments.map((assignment) => <article className="delivery-request" key={assignment.id}><div><strong>{assignment.Order?.reference ?? assignment.id}</strong><p>Shared print or attestation delivery</p></div><span>LKR {Number(assignment.earnings).toFixed(2)}</span></article>)}</div> : !error && <div className="empty-workspace"><h2>No delivery requests</h2><p>Eligible assignments appear when you are approved and online.</p></div>}</section>;
 }
 
 function ActiveDeliveryPage() {
-  const [otp, setOtp] = useState('');
-  const [status, setStatus] = useState('Waiting for assignment');
-  return <section className="rider-content"><div className="shop-heading"><div><p>Current task</p><h1>Active delivery</h1></div></div><div className="active-layout"><div className="empty-workspace"><h2>No active delivery</h2><p>Accept a delivery request to start a print or attestation handover.</p></div><aside className="handover-panel"><p className="section-label">Handover verification</p><label>Customer or shop OTP<input inputMode="numeric" maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g,'').slice(0,6))} placeholder="123456" /></label><button type="button" disabled={!/^[0-9]{6}$/.test(otp)} onClick={() => setStatus('Handover OTP verified')}>Verify handover</button><small>{status}</small></aside></div></section>;
+  return <section className="rider-content"><div className="shop-heading"><div><p>Current task</p><h1>Active delivery</h1></div></div><div className="empty-workspace"><h2>Handover updates are not available here yet</h2><p>Delivery status changes require server verification of a shop or customer handover code. The rider portal does not yet provide the code-sharing or status-update flow, so it will not report a handover as verified.</p></div></section>;
 }
 
 function ProfilePage() {
@@ -137,13 +200,17 @@ function ProfilePage() {
 
 function EarningsPage() {
   const [earnings, setEarnings] = useState({ earned: 0, pending: 0 });
+  const [error, setError] = useState('');
   useEffect(() => {
     const token = window.sessionStorage.getItem('rider-access-token');
-    if (!token) return;
+    if (!token) { setError('Sign in to load settlement information.'); return; }
     const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
-    fetch(`${apiUrl}/riders/me`, { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.ok ? response.json() as Promise<{ data: { userId: string } }> : Promise.reject()).then((profile) => fetch(`${apiUrl}/riders/${profile.data.userId}/earnings`, { headers: { Authorization: `Bearer ${token}` } })).then((response) => response?.ok ? response.json() as Promise<{ data: typeof earnings }> : Promise.reject()).then((result) => setEarnings(result.data)).catch(() => setEarnings({ earned: 0, pending: 0 }));
+    fetch(`${apiUrl}/riders/me/earnings`, { headers: { Authorization: `Bearer ${token}` } }).then(async (response) => {
+      if (!response.ok) throw new Error('Settlement information could not be loaded.');
+      return response.json() as Promise<{ data: typeof earnings }>;
+    }).then((result) => setEarnings(result.data)).catch((caught: unknown) => setError(caught instanceof TypeError ? 'Settlement service is unavailable. Please try again.' : caught instanceof Error ? caught.message : 'Settlement information could not be loaded.'));
   }, []);
-  return <section className="rider-content"><div className="shop-heading"><div><p>Earnings</p><h1>Today and settlements</h1></div></div><div className="earnings-grid"><article><span>Total earned</span><strong>LKR {earnings.earned.toFixed(2)}</strong></article><article><span>Pending settlement</span><strong>LKR {earnings.pending.toFixed(2)}</strong></article></div></section>;
+  return <section className="rider-content"><div className="shop-heading"><div><p>Earnings</p><h1>Today and settlements</h1></div></div>{error ? <p className="registration-error" role="alert">{error}</p> : <div className="earnings-grid"><article><span>Total earned</span><strong>LKR {earnings.earned.toFixed(2)}</strong></article><article><span>Pending settlement</span><strong>LKR {earnings.pending.toFixed(2)}</strong></article></div>}</section>;
 }
 
 function SimplePage({ title, empty }: { title: string; empty: string }) {
