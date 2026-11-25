@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   AgentEarnings,
+  AgentNotification,
   AgentProfile,
   AgentService,
   AgentSession,
@@ -102,6 +103,8 @@ export default function AgentPortal() {
   const [jobs, setJobs] = useState<AttestationJob[]>([]);
   const [services, setServices] = useState<AgentService[]>([]);
   const [earnings, setEarnings] = useState<AgentEarnings>({ total: 0, paid: 0, pending: 0, settlements: [] });
+  const [notifications, setNotifications] = useState<AgentNotification[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -148,12 +151,14 @@ export default function AgentPortal() {
       apiRequest<AttestationJob[]>('/agents/me/jobs'),
       apiRequest<AgentService[]>('/agents/me/services'),
       apiRequest<AgentEarnings>('/agents/me/earnings'),
+      apiRequest<AgentNotification[]>('/agents/me/notifications'),
     ])
-      .then(([nextJobs, nextServices, nextEarnings]) => {
+      .then(([nextJobs, nextServices, nextEarnings, nextNotifications]) => {
         if (!active) return;
         setJobs(nextJobs);
         setServices(nextServices);
         setEarnings(nextEarnings);
+        setNotifications(nextNotifications);
       })
       .catch((requestError: unknown) => {
         if (active) setError(requestError instanceof Error ? requestError.message : 'Unable to load your workspace.');
@@ -236,6 +241,20 @@ export default function AgentPortal() {
     }
   }
 
+  async function markNotificationRead(notificationId: string) {
+    setError('');
+    try {
+      await apiRequest(`/agents/me/notifications/${encodeURIComponent(notificationId)}/read`, {
+        method: 'PATCH',
+      });
+      setNotifications((current) => current.map((item) =>
+        item.id === notificationId ? { ...item, readAt: new Date().toISOString() } : item,
+      ));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to update this notification.');
+    }
+  }
+
   async function signOut() {
     const stored = window.localStorage.getItem('quickdoc-agent-session');
     let logoutWarning = '';
@@ -296,6 +315,10 @@ export default function AgentPortal() {
           <button className="agent-menu" type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><span /><span /><span /></button>
           <div className="breadcrumb"><span>Agent workspace</span><b>›</b><strong>{currentLabel}</strong></div>
           <div className="topbar__actions">
+            <div className="notifications-menu">
+              <button className="notification-button" type="button" aria-label={`Notifications${notifications.some((item) => !item.readAt) ? ', unread items' : ''}`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Icon name="bell" />{notifications.some((item) => !item.readAt) && <span className="notification-dot" />}</button>
+              {notificationsOpen && <div className="notification-panel" role="region" aria-label="Notifications"><div className="notification-panel-heading"><strong>Notifications</strong><span>{notifications.filter((item) => !item.readAt).length} unread</span></div>{notifications.length ? notifications.map((item) => <button className={`notification-item ${item.readAt ? 'notification-item--read' : ''}`} key={item.id} type="button" onClick={() => { if (!item.readAt) void markNotificationRead(item.id); }}><span><strong>{item.title}</strong><time>{formatDate(item.createdAt)}</time></span><p>{item.body}</p></button>) : <p className="notification-empty">You’re all caught up.</p>}</div>}
+            </div>
             <span className={`account-status ${profile.status === 'APPROVED' ? 'account-status--approved' : ''}`}><i />{profile.status === 'APPROVED' ? (profile.isOpen ? 'Accepting work' : 'Not accepting work') : 'Verification pending'}</span>
             <button className="sign-out" type="button" onClick={signOut}>Sign out</button>
             <span className="topbar__avatar" aria-label={profile.businessName}>{profile.businessName.slice(0, 2).toUpperCase()}</span>
@@ -526,16 +549,16 @@ function ServicesPage({ services, loading, onSaved }: { services: AgentService[]
     setBusy(true);
     setError('');
     try {
-      await Promise.all(edited.map((service) => apiRequest('/agents/me/services', {
+      await apiRequest('/agents/me/services/batch', {
         method: 'POST',
-        body: {
+        body: { services: edited.map((service) => ({
           code: service.code,
           name: service.name.trim(),
           price: Number(service.price),
           estimatedDays: Number(service.estimatedDays),
           enabled: service.enabled,
-        },
-      })));
+        })) },
+      });
       onSaved();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Unable to save service changes.');

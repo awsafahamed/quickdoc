@@ -40,9 +40,9 @@ export default function CustomerRegisterPage() {
       window.sessionStorage.setItem('print-attest-access-token', result.data.accessToken);
       window.localStorage.setItem('print-attest-refresh-token', result.data.refreshToken);
       window.localStorage.setItem('print-attest-session', JSON.stringify({ name: name.trim(), email: result.data.user.email, phone: phone.trim() }));
-      router.push('/');
+      router.push('/dashboard');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Registration could not be completed.');
+      setError(caught instanceof TypeError ? 'Registration service is unavailable. Please try again later.' : caught instanceof Error ? caught.message : 'Registration could not be completed.');
     } finally {
       setLoading(false);
     }

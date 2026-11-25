@@ -1,8 +1,8 @@
 :root {
   color-scheme: light;
   --ink: #17212b;
-  --muted: #6b7785;
-  --subtle: #929da7;
+  --muted: #5e6b78;
+  --subtle: #65717d;
   --line: #e5e9ee;
   --surface: #f6f8fa;
   --white: #fff;
@@ -150,6 +150,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .breadcrumb strong { color: var(--ink); font-weight: 650; }
 .topbar__actions { display: flex; align-items: center; gap: 18px; }
 .topbar__avatar { width: 32px; height: 32px; }
+.notifications-menu { position: relative; }
+.notification-button { position: relative; display: grid; width: 34px; height: 34px; place-items: center; color: #657280; background: transparent; border: 0; border-radius: 8px; }
+.notification-button:hover { background: #f3f6f8; }
+.notification-button .nav-icon { width: 18px; height: 18px; }
+.notification-dot { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; background: var(--blue); border: 1px solid #fff; border-radius: 50%; }
+.notification-panel { position: absolute; z-index: 30; top: 44px; right: -20px; width: min(360px, calc(100vw - 32px)); max-height: min(440px, calc(100vh - 90px)); overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 30px #17212b1c; }
+.notification-panel-heading { display: flex; align-items: center; justify-content: space-between; padding: 14px 15px; border-bottom: 1px solid var(--line); }
+.notification-panel-heading strong { font-size: 12px; }
+.notification-panel-heading span { color: var(--muted); font-size: 10px; }
+.notification-item { display: grid; width: 100%; gap: 5px; padding: 12px 15px; color: #3d4b58; background: #f5f8ff; border: 0; border-bottom: 1px solid var(--line); text-align: left; }
+.notification-item:hover { background: #eef4ff; }
+.notification-item--read { background: #fff; }
+.notification-item > span { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.notification-item strong { font-size: 11px; }
+.notification-item time { flex: 0 0 auto; color: var(--subtle); font-size: 9px; }
+.notification-item p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.notification-empty { margin: 0; padding: 23px 15px; color: var(--muted); font-size: 11px; text-align: center; }
 .account-status { display: flex; align-items: center; gap: 7px; color: #7b5b13; font-size: 11px; font-weight: 650; }
 .account-status i, .verification-dot { width: 7px; height: 7px; flex: 0 0 auto; background: #d99b1b; border-radius: 50%; }
 .account-status--approved { color: #237b58; }
@@ -229,7 +246,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .summary-metric strong { grid-column: 1 / -1; margin-top: 13px; overflow-wrap: anywhere; font-size: 22px; font-weight: 680; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
 .summary-metric small { grid-column: 1 / -1; margin-top: 3px; color: var(--subtle); font-size: 10px; }
 
-.dashboard-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 36px 0 14px; }
+.dashboard-section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 36px 0 14px; }
 .dashboard-section-heading h2, .dashboard-lower h2 { margin: 0; font-size: 17px; font-weight: 680; letter-spacing: -.025em; }
 .dashboard-section-heading p, .dashboard-lower__copy p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 .text-action { display: inline-flex; align-items: center; gap: 6px; padding: 6px 0; color: var(--blue); background: transparent; border: 0; font-size: 12px; font-weight: 650; }
@@ -326,7 +343,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .service-name strong { color: #34414d; font-size: 11px; font-weight: 650; }
 .service-name small { color: var(--subtle); font-size: 9px; }
 .field-with-prefix, .field-with-suffix { display: grid; grid-template-columns: auto minmax(0, 1fr); overflow: hidden; border: 1px solid #d8dfe6; border-radius: 6px; }
-.field-with-prefix > span, .field-with-suffix > span { display: grid; place-items: center; padding: 0 8px; color: #74808a; background: #f7f9fb; border-right: 1px solid #d8dfe6; font-size: 9px; }
+.field-with-prefix > span, .field-with-suffix > span { display: grid; place-items: center; padding: 0 8px; color: #5e6b78; background: #f7f9fb; border-right: 1px solid #d8dfe6; font-size: 9px; }
 .field-with-prefix input, .field-with-suffix input { width: 100%; min-width: 0; height: 34px; padding: 6px 8px; color: var(--ink); background: #fff; border: 0; outline: none; font-size: 11px; font-variant-numeric: tabular-nums; }
 .field-with-prefix input:focus-visible, .field-with-suffix input:focus-visible { outline: 2px solid #76a3fb; outline-offset: -2px; }
 .field-with-suffix { grid-template-columns: minmax(0, 1fr) auto; }
@@ -380,7 +397,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 .agent-auth { display: grid; min-height: 100vh; grid-template-columns: minmax(320px, .9fr) minmax(400px, 1.1fr); background: #fff; }
 .agent-auth__intro { display: flex; min-height: 100vh; flex-direction: column; justify-content: space-between; padding: 35px clamp(28px, 5vw, 72px) 29px; color: #fff; background: var(--forest); }
-.agent-auth__intro > img { width: 154px; filter: brightness(0) invert(1); }
+.agent-auth__intro > img { width: 154px; padding: 5px 8px; background: #fff; border-radius: 8px; }
 .agent-auth__intro > div { max-width: 465px; margin: auto 0; padding: 72px 0; }
 .auth-kicker, .auth-overline { margin: 0 0 14px; color: #93b7a9; font-size: 10px; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
 .agent-auth__intro h1 { max-width: 440px; margin: 0; font-size: clamp(34px, 4vw, 50px); font-weight: 600; letter-spacing: -.052em; line-height: 1.08; }
@@ -451,7 +468,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .agent-menu span { display: block; width: 19px; height: 1.5px; background: var(--ink); }
   .breadcrumb { margin-left: 3px; font-size: 11px; }
   .breadcrumb > span, .breadcrumb > b { display: none; }
-  .topbar__actions { gap: 11px; }
+  .topbar__actions { gap: 8px; }
   .account-status { max-width: 128px; font-size: 9px; }
   .sign-out { font-size: 10px; }
   .topbar__avatar { width: 29px; height: 29px; font-size: 9px; }

@@ -58,6 +58,14 @@ export interface AgentEarnings {
   settlements: AgentSettlement[];
 }
 
+export interface AgentNotification {
+  id: string;
+  title: string;
+  body: string;
+  readAt: string | null;
+  createdAt: string;
+}
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
 const SESSION_KEY = 'quickdoc-agent-session';
@@ -144,7 +152,10 @@ export async function apiRequest<T>(
     }
     const refreshed = await parseResponse<AgentSession>(refreshedResponse);
     saveSession(refreshed);
-    response = await send(path, init, refreshed.accessToken);
+    const retryBody = path === '/auth/logout' && typeof options.body === 'object' && options.body !== null
+      ? JSON.stringify({ ...options.body, refreshToken: refreshed.refreshToken })
+      : init.body;
+    response = await send(path, { ...init, body: retryBody }, refreshed.accessToken);
   }
 
   return parseResponse<T>(response);

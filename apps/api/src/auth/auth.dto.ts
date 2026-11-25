@@ -1,4 +1,4 @@
-import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
+import { IsEmail, IsIn, IsOptional, IsString, Length } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail()
@@ -18,7 +18,8 @@ export class RegisterDto {
 
   @IsOptional()
   @IsString()
-  role?: 'CUSTOMER' | 'SHOP_OWNER' | 'RIDER';
+  @IsIn(['CUSTOMER', 'SHOP_OWNER', 'RIDER', 'AGENT'])
+  role?: 'CUSTOMER' | 'SHOP_OWNER' | 'RIDER' | 'AGENT';
 }
 
 export class LoginDto {

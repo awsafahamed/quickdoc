@@ -1,28 +1,60 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
-import { IsArray, IsBoolean, IsOptional, IsString, IsUUID, IsNumber, Min } from 'class-validator';
+import {
+  BadRequestException,
+  Body,
+  ConflictException,
+  Controller,
+  ForbiddenException,
+  Get,
+  NotFoundException,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsInt,
+  IsIn,
+  Matches,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Length,
+  MaxLength,
+  Min,
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  ValidateNested,
+} from 'class-validator';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 
-class AgentRegisterDto {
-  @IsUUID()
-  userId!: string;
-
+class AgentProfileDto {
   @IsString()
+  @Length(2, 120)
   businessName!: string;
 
   @IsString()
+  @Length(5, 500)
   address!: string;
 
   @IsString()
+  @Length(7, 20)
   phone!: string;
 }
 
 class AgentServiceDto {
   @IsString()
+  @Matches(/^[A-Za-z0-9_-]{2,40}$/)
   code!: string;
 
   @IsString()
+  @Length(2, 120)
   name!: string;
 
   @Type(() => Number)
@@ -31,7 +63,7 @@ class AgentServiceDto {
   price!: number;
 
   @Type(() => Number)
-  @IsNumber()
+  @IsInt()
   @Min(1)
   estimatedDays!: number;
 
@@ -39,39 +71,309 @@ class AgentServiceDto {
   enabled!: boolean;
 }
 
+class CustodyDto {
+  @IsIn(['RECEIVED', 'PROCESSING', 'ATTESTED', 'RETURN_READY'])
+  eventType!: 'RECEIVED' | 'PROCESSING' | 'ATTESTED' | 'RETURN_READY';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+class AvailabilityDto {
+  @IsBoolean()
+  isOpen!: boolean;
+}
+
+class AgentServicesDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => AgentServiceDto)
+  services!: AgentServiceDto[];
+}
+
+type AuthenticatedRequest = { user: { id: string; roles: string[] } };
+
+const nextStatus = {
+  RECEIVED: { from: 'COLLECTED', to: 'AGENT_RECEIVED' },
+  PROCESSING: { from: 'AGENT_RECEIVED', to: 'PROCESSING' },
+  ATTESTED: { from: 'PROCESSING', to: 'ATTESTED' },
+  RETURN_READY: { from: 'ATTESTED', to: 'RETURN_READY' },
+} as const;
+
 @Controller('agents')
+@UseGuards(AuthGuard('jwt'))
 export class AgentsController {
   constructor(private readonly prisma: PrismaService) {}
 
+  private assertAgent(req: AuthenticatedRequest) {
+    if (!req.user.roles.includes('AGENT')) {
+      throw new ForbiddenException('An agent account is required');
+    }
+  }
+
+  private async profileFor(req: AuthenticatedRequest) {
+    this.assertAgent(req);
+    const profile = await this.prisma.agentProfile.findUnique({
+      where: { userId: req.user.id },
+    });
+    if (!profile) throw new NotFoundException('Complete your agent profile first');
+    return profile;
+  }
+
+  @Get('me')
+  async profile(@Req() req: AuthenticatedRequest) {
+    this.assertAgent(req);
+    return {
+      data: await this.prisma.agentProfile.findUnique({
+        where: { userId: req.user.id },
+        include: {
+          user: { select: { name: true, email: true } },
+        },
+      }),
+    };
+  }
+
   @Post('register')
-  async register(@Body() dto: AgentRegisterDto) {
-    const existing = await this.prisma.agentProfile.findUnique({ where: { userId: dto.userId } });
-    if (existing) return { data: existing };
-    return { data: await this.prisma.agentProfile.create({ data: { userId: dto.userId, businessName: dto.businessName, address: dto.address, phone: dto.phone } }) };
+  async register(@Req() req: AuthenticatedRequest, @Body() dto: AgentProfileDto) {
+    this.assertAgent(req);
+    const profile = await this.prisma.agentProfile.upsert({
+      where: { userId: req.user.id },
+      create: {
+        userId: req.user.id,
+        businessName: dto.businessName,
+        address: dto.address,
+        phone: dto.phone,
+      },
+      update: {
+        businessName: dto.businessName,
+        address: dto.address,
+        phone: dto.phone,
+      },
+      include: { user: { select: { name: true, email: true } } },
+    });
+    return { data: profile };
   }
 
-  @Get(':agentId/jobs')
-  async jobs(@Param('agentId') agentId: string) {
-    return { data: await this.prisma.attestationJob.findMany({ where: { agentId }, include: { custodyEvents: { orderBy: { createdAt: 'desc' } } }, orderBy: { createdAt: 'desc' } }) };
+  @Patch('me')
+  async updateProfile(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: AgentProfileDto,
+  ) {
+    const profile = await this.profileFor(req);
+    return {
+      data: await this.prisma.agentProfile.update({
+        where: { id: profile.id },
+        data: {
+          businessName: dto.businessName,
+          address: dto.address,
+          phone: dto.phone,
+        },
+        include: { user: { select: { name: true, email: true } } },
+      }),
+    };
   }
 
-  @Post(':agentId/jobs/:jobId/custody')
-  async custody(@Param('agentId') agentId: string, @Param('jobId') jobId: string, @Body() body: { eventType: 'RECEIVED' | 'PROCESSING' | 'ATTESTED' | 'RETURN_READY'; note?: string; evidenceUrl?: string }) {
-    const job = await this.prisma.attestationJob.findFirst({ where: { id: jobId, agentId } });
-    if (!job) return { error: 'Attestation job was not found for this agent' };
-    const statusMap = { RECEIVED: 'AGENT_RECEIVED', PROCESSING: 'PROCESSING', ATTESTED: 'ATTESTED', RETURN_READY: 'RETURN_READY' } as const;
-    const event = await this.prisma.custodyEvent.create({ data: { id: randomUUID(), jobId, eventType: body.eventType, actorId: agentId, evidenceUrl: body.evidenceUrl, note: body.note } });
-    await this.prisma.attestationJob.update({ where: { id: jobId }, data: { status: statusMap[body.eventType] } });
+  @Patch('me/availability')
+  async availability(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: AvailabilityDto,
+  ) {
+    const profile = await this.profileFor(req);
+    if (dto.isOpen && profile.status !== 'APPROVED') {
+      throw new BadRequestException(
+        'Only approved agents can accept new work',
+      );
+    }
+    return {
+      data: await this.prisma.agentProfile.update({
+        where: { id: profile.id },
+        data: { isOpen: dto.isOpen },
+        include: { user: { select: { name: true, email: true } } },
+      }),
+    };
+  }
+
+  @Get('me/jobs')
+  async jobs(@Req() req: AuthenticatedRequest) {
+    const profile = await this.profileFor(req);
+    return {
+      data: await this.prisma.attestationJob.findMany({
+        where: { agentId: profile.id },
+        include: {
+          custodyEvents: { orderBy: { createdAt: 'desc' } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    };
+  }
+
+  @Post('me/jobs/:jobId/custody')
+  async custody(
+    @Param('jobId', new ParseUUIDPipe()) jobId: string,
+    @Body() dto: CustodyDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    const profile = await this.profileFor(request);
+    if (profile.status !== 'APPROVED') {
+      throw new ForbiddenException('Only approved agents can update job custody');
+    }
+    const job = await this.prisma.attestationJob.findFirst({
+      where: { id: jobId, agentId: profile.id },
+    });
+    if (!job) throw new NotFoundException('This job was not found');
+
+    const transition = nextStatus[dto.eventType];
+    if (job.status !== transition.from) {
+      throw new BadRequestException(
+        `This job must be ${transition.from.toLowerCase().replaceAll('_', ' ')} before this update`,
+      );
+    }
+
+    const event = await this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.attestationJob.updateMany({
+        where: { id: job.id, agentId: profile.id, status: job.status },
+        data: { status: transition.to },
+      });
+      if (updated.count !== 1) {
+        throw new ConflictException('This job changed; refresh and try again');
+      }
+      return transaction.custodyEvent.create({
+        data: {
+          id: randomUUID(),
+          jobId: job.id,
+          eventType: dto.eventType,
+          actorId: request.user.id,
+          note: dto.note,
+        },
+      });
+    });
     return { data: event };
   }
 
-  @Post(':agentId/services')
-  async service(@Param('agentId') agentId: string, @Body() dto: AgentServiceDto) {
-    return { data: await this.prisma.agentService.upsert({ where: { agentId_code: { agentId, code: dto.code } }, create: { agentId, code: dto.code, name: dto.name, price: dto.price, estimatedDays: dto.estimatedDays, enabled: dto.enabled }, update: { name: dto.name, price: dto.price, estimatedDays: dto.estimatedDays, enabled: dto.enabled } }) };
+  @Get('me/services')
+  async services(@Req() req: AuthenticatedRequest) {
+    const profile = await this.profileFor(req);
+    return {
+      data: await this.prisma.agentService.findMany({
+        where: { agentId: profile.id },
+        orderBy: { name: 'asc' },
+      }),
+    };
   }
 
-  @Get(':agentId/services')
-  async services(@Param('agentId') agentId: string) {
-    return { data: await this.prisma.agentService.findMany({ where: { agentId }, orderBy: { name: 'asc' } }) };
+  @Post('me/services')
+  async service(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: AgentServiceDto,
+  ) {
+    const profile = await this.profileFor(req);
+    const code = dto.code.trim().toUpperCase();
+    return {
+      data: await this.prisma.agentService.upsert({
+        where: { agentId_code: { agentId: profile.id, code } },
+        create: {
+          agentId: profile.id,
+          code,
+          name: dto.name.trim(),
+          price: dto.price,
+          estimatedDays: dto.estimatedDays,
+          enabled: dto.enabled,
+        },
+        update: {
+          name: dto.name.trim(),
+          price: dto.price,
+          estimatedDays: dto.estimatedDays,
+          enabled: dto.enabled,
+        },
+      }),
+    };
+  }
+
+  @Post('me/services/batch')
+  async saveServices(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: AgentServicesDto,
+  ) {
+    const profile = await this.profileFor(req);
+    const codes = dto.services.map((service) => service.code.trim().toUpperCase());
+    if (new Set(codes).size !== codes.length) {
+      throw new BadRequestException('Each service must have a unique code');
+    }
+    const operations = dto.services.map((service, index) =>
+      this.prisma.agentService.upsert({
+        where: { agentId_code: { agentId: profile.id, code: codes[index] } },
+        create: {
+          agentId: profile.id,
+          code: codes[index],
+          name: service.name.trim(),
+          price: service.price,
+          estimatedDays: service.estimatedDays,
+          enabled: service.enabled,
+        },
+        update: {
+          name: service.name.trim(),
+          price: service.price,
+          estimatedDays: service.estimatedDays,
+          enabled: service.enabled,
+        },
+      }),
+    );
+    return { data: await this.prisma.$transaction(operations) };
+  }
+
+  @Get('me/earnings')
+  async earnings(@Req() req: AuthenticatedRequest) {
+    const profile = await this.profileFor(req);
+    const settlements = await this.prisma.settlement.findMany({
+      where: { agentId: profile.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    const total = settlements.reduce(
+      (sum, settlement) => sum + Number(settlement.amount),
+      0,
+    );
+    const paid = settlements
+      .filter((settlement) => settlement.status === 'PAID')
+      .reduce((sum, settlement) => sum + Number(settlement.amount), 0);
+    const pending = settlements
+      .filter((settlement) => settlement.status === 'PENDING')
+      .reduce((sum, settlement) => sum + Number(settlement.amount), 0);
+    return { data: { total, paid, pending, settlements } };
+  }
+
+  @Get('me/notifications')
+  async notifications(@Req() req: AuthenticatedRequest) {
+    await this.profileFor(req);
+    return {
+      data: await this.prisma.notification.findMany({
+        where: { userId: req.user.id },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+      }),
+    };
+  }
+
+  @Patch('me/notifications/:notificationId/read')
+  async markNotificationRead(
+    @Req() req: AuthenticatedRequest,
+    @Param('notificationId', new ParseUUIDPipe()) notificationId: string,
+  ) {
+    await this.profileFor(req);
+    const updated = await this.prisma.notification.updateMany({
+      where: { id: notificationId, userId: req.user.id, readAt: null },
+      data: { readAt: new Date() },
+    });
+    if (updated.count === 0) {
+      const notification = await this.prisma.notification.findFirst({
+        where: { id: notificationId, userId: req.user.id },
+        select: { id: true },
+      });
+      if (!notification) throw new NotFoundException('Notification was not found');
+    }
+    return { data: { read: true } };
   }
 }

@@ -47,6 +47,7 @@ Use `render.yaml` with a Render Blueprint. Set these secret/environment values i
 - `JWT_SECRET`: a cryptographically random secret
 - `WEB_ORIGINS`: comma-separated production frontend origins
 - `NODE_ENV=production`
-- `API_PORT=10000`
 
-After deployment, set each frontend's `NEXT_PUBLIC_API_URL` to `https://<render-service>/api/v1`.
+The Blueprint builds from the workspace root, generates Prisma Client, and starts the API as a workspace package. Render supplies `PORT` automatically; local development can continue to use `API_PORT`.
+
+After the Render service is deployed, set `NEXT_PUBLIC_API_URL` in **all five Vercel frontend projects** (customer, shop, rider, agent and admin) to `https://<render-service>/api/v1`, then redeploy each project so the public variable is included in its build. Add all five production frontend origins to `WEB_ORIGINS` in Render so browser requests pass CORS checks.

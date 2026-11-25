@@ -23,7 +23,17 @@ export class AuthService {
         name: dto.name,
         passwordHash,
         CustomerProfile: dto.phone ? { create: { phone: dto.phone } } : undefined,
-        UserRole: { create: { role: dto.role === 'SHOP_OWNER' ? 'SHOP_OWNER' : dto.role === 'RIDER' ? 'RIDER' : 'CUSTOMER' } },
+        UserRole: {
+          create: {
+            role: dto.role === 'SHOP_OWNER'
+              ? 'SHOP_OWNER'
+              : dto.role === 'RIDER'
+                ? 'RIDER'
+                : dto.role === 'AGENT'
+                  ? 'AGENT'
+                  : 'CUSTOMER',
+          },
+        },
       },
       include: { UserRole: true, CustomerProfile: true },
     });

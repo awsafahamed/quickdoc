@@ -38,14 +38,15 @@ export default function LoginPage() {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
       fetch(`${apiUrl}/auth/otp/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: phone.trim(), code: otp }) })
         .then(async (response) => {
-          if (!response.ok) throw new Error('OTP verification failed');
+          if (response.status === 401 || response.status === 400) throw new Error('The verification code is invalid or expired.');
+          if (!response.ok) throw new Error('OTP service is unavailable. Try again later.');
           const result = await response.json() as { data: { accessToken: string; refreshToken: string; user: { email: string; roles: string[] } } };
           window.sessionStorage.setItem('print-attest-access-token', result.data.accessToken);
           window.localStorage.setItem('print-attest-refresh-token', result.data.refreshToken);
           window.localStorage.setItem('print-attest-session', JSON.stringify({ phone: phone.trim(), name: 'Customer', email: result.data.user.email }));
-          router.push('/');
+          router.push('/dashboard');
         })
-        .catch(() => setError('The verification code is invalid or expired.'));
+        .catch((caught: unknown) => setError(caught instanceof TypeError ? 'Could not reach the verification service. Please try again later.' : caught instanceof Error ? caught.message : 'Phone verification failed.'));
       return;
     } else {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
@@ -59,14 +60,15 @@ export default function LoginPage() {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
       fetch(`${apiUrl}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), password }) })
         .then(async (response) => {
-          if (!response.ok) throw new Error('Login failed');
+          if (response.status === 401) throw new Error('Email or password is incorrect.');
+          if (!response.ok) throw new Error('Sign-in service is unavailable. Please try again later.');
           const result = await response.json() as { data: { accessToken: string; refreshToken: string; user: { email: string; roles: string[] } } };
           window.sessionStorage.setItem('print-attest-access-token', result.data.accessToken);
           window.localStorage.setItem('print-attest-refresh-token', result.data.refreshToken);
           window.localStorage.setItem('print-attest-session', JSON.stringify({ phone: '', name: email.split('@')[0], email: result.data.user.email }));
-          router.push('/');
+          router.push('/dashboard');
         })
-        .catch(() => setError('Email or password is incorrect.'));
+        .catch((caught: unknown) => setError(caught instanceof TypeError ? 'Could not reach the sign-in service. Please try again later.' : caught instanceof Error ? caught.message : 'Sign-in failed.'));
       return;
     }
     window.localStorage.setItem('print-attest-session', JSON.stringify({
@@ -74,7 +76,7 @@ export default function LoginPage() {
       name: email ? email.split('@')[0] : 'Amar Khan',
       email: method === 'email' ? email.trim() : '',
     }));
-    router.push('/');
+    router.push('/dashboard');
   };
 
   const googleSignIn = () => {

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { resolve } from 'node:path';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PrintModule } from './print/print.module';
@@ -12,6 +13,21 @@ import { CustomerModule } from './customer/customer.module';
 import { AuthModule } from './auth/auth.module';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, AuthModule, HealthModule, PrintModule, AttestationModule, ShopsModule, RidersModule, AdminModule, AgentsModule, CustomerModule],
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: [resolve(process.cwd(), '.env'), resolve(__dirname, '../../../.env')],
+    }),
+    PrismaModule,
+    AuthModule,
+    HealthModule,
+    PrintModule,
+    AttestationModule,
+    ShopsModule,
+    RidersModule,
+    AdminModule,
+    AgentsModule,
+    CustomerModule,
+  ],
 })
 export class AppModule {}

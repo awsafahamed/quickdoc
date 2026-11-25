@@ -45,6 +45,7 @@ model AgentProfile {
   updatedAt      DateTime     @updatedAt
   services       AgentService[]
   jobs           AttestationJob[]
+  settlements    Settlement[]
 }
 
 model AgentService {
@@ -427,16 +428,19 @@ model Settlement {
   id           String        @id @db.Uuid
   shopId       String?       @db.Uuid
   riderId      String?       @db.Uuid
+  agentId      String?       @db.Uuid
   amount       Decimal       @db.Decimal(12, 2)
   status       String        @default("PENDING")
   reference    String?       @unique
   createdAt    DateTime      @default(now())
   updatedAt    DateTime
   RiderProfile RiderProfile? @relation(fields: [riderId], references: [userId])
+  AgentProfile AgentProfile? @relation(fields: [agentId], references: [id])
   Shop         Shop?         @relation(fields: [shopId], references: [id])
 
   @@index([riderId, status])
   @@index([shopId, status])
+  @@index([agentId, status])
 }
 
 model ShopPrice {
@@ -497,6 +501,7 @@ enum Role {
   CUSTOMER
   SHOP_OWNER
   RIDER
+  AGENT
   ADMIN
 }
 
