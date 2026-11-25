@@ -1,10 +1,12 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { IsEmail, IsEnum, IsOptional, IsString, Length, IsNumber, Min, IsUUID, IsBoolean, Max } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsEmail, IsEnum, IsOptional, IsString, Length, IsNumber, Min, IsUUID, IsBoolean, Max, IsInt } from 'class-validator';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PrintPricingService } from '../print/print-pricing.service';
 import { DeliverySpeed, PrintColour, PrintPaperSize, PrintSides } from '../print/print.types';
+import { PrivateObjectStorageService } from '../storage/private-object-storage.service';
 
 class ProfileDto {
   @IsOptional()
@@ -51,12 +53,30 @@ class DocumentDto {
   sizeBytes!: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
   @IsNumber()
+  @Max(10000)
   pageCount?: number;
 
-  @IsOptional()
   @IsString()
+  @Length(1, 512)
   objectKey?: string;
+}
+
+class DocumentUploadUrlDto {
+  @IsString()
+  @Length(1, 255)
+  name!: string;
+
+  @IsString()
+  mimeType!: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(25 * 1024 * 1024)
+  sizeBytes!: number;
 }
 
 class PrintOrderDto {
@@ -85,6 +105,29 @@ class PrintOrderDto {
   @Max(10000)
   printedSides!: number;
 
+  @IsOptional()
+  @IsBoolean()
+  binding?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  stapling?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  lamination?: boolean;
+
+  @IsOptional()
+  @IsEnum(DeliverySpeed)
+  deliverySpeed?: DeliverySpeed;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(200)
+  deliveryDistanceKm?: number;
+
   @IsString()
   deliveryAddress!: string;
 
@@ -102,6 +145,7 @@ export class CustomerController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly printPricing: PrintPricingService,
+    private readonly storage: PrivateObjectStorageService,
   ) {}
 
   @Get('me')
@@ -148,11 +192,27 @@ export class CustomerController {
     return { data: await this.prisma.document.findMany({ where: { userId: request.user.id }, orderBy: { createdAt: 'desc' } }) };
   }
 
+  @Post('documents/upload-url')
+  async createDocumentUploadUrl(
+    @Req() request: { user: { id: string } },
+    @Body() dto: DocumentUploadUrlDto,
+  ) {
+    if (dto.mimeType !== 'application/pdf' || !dto.name.toLowerCase().endsWith('.pdf')) {
+      throw new BadRequestException('Only PDF documents are supported');
+    }
+    const objectKey = `private/customers/${request.user.id}/${randomUUID()}.pdf`;
+    return { data: { objectKey, uploadUrl: await this.storage.createUploadUrl(objectKey), expiresIn: 300 } };
+  }
+
   @Post('documents')
   async createDocument(@Req() request: { user: { id: string } }, @Body() dto: DocumentDto) {
     if (dto.mimeType !== 'application/pdf') throw new BadRequestException('Only PDF documents are supported');
     if (dto.sizeBytes > 25 * 1024 * 1024) throw new BadRequestException('Document exceeds the 25 MB limit');
-    const objectKey = dto.objectKey ?? `private/customers/${request.user.id}/${randomUUID()}.pdf`;
+    if (!dto.objectKey?.startsWith(`private/customers/${request.user.id}/`)) {
+      throw new BadRequestException('Document upload key is invalid');
+    }
+    await this.storage.verifyPdfUpload(dto.objectKey, dto.sizeBytes);
+    const objectKey = dto.objectKey;
     return { data: await this.prisma.document.create({ data: { id: randomUUID(), userId: request.user.id, objectKey, name: dto.name, mimeType: dto.mimeType, sizeBytes: dto.sizeBytes, pageCount: dto.pageCount, expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), updatedAt: new Date() } }) };
   }
 
@@ -163,11 +223,19 @@ export class CustomerController {
     return { data: document };
   }
 
+  @Get('documents/:id/preview-url')
+  async documentPreviewUrl(@Param('id') id: string, @Req() request: { user: { id: string } }) {
+    const document = await this.prisma.document.findFirst({ where: { id, userId: request.user.id } });
+    if (!document) throw new BadRequestException('Document was not found');
+    return { data: { previewUrl: await this.storage.createPreviewUrl(document.objectKey, document.name) } };
+  }
+
   @Delete('documents/:id')
   async deleteDocument(@Param('id') id: string, @Req() request: { user: { id: string } }) {
     const document = await this.prisma.document.findFirst({ where: { id, userId: request.user.id } });
     if (!document) throw new BadRequestException('Document was not found');
     if (await this.prisma.orderItem.count({ where: { documentId: id } })) throw new BadRequestException('Document cannot be deleted while attached to an order');
+    await this.storage.deleteObject(document.objectKey);
     await this.prisma.document.delete({ where: { id } });
     return { data: { deleted: true } };
   }
@@ -202,14 +270,14 @@ export class CustomerController {
       paperSize: dto.paperSize,
       colour: dto.colour ? PrintColour.COLOUR : PrintColour.BLACK_WHITE,
       sides: dto.duplex ? PrintSides.DUPLEX : PrintSides.SINGLE,
-      binding: false,
-      stapling: false,
-      lamination: false,
-      deliverySpeed: DeliverySpeed.STANDARD,
-      deliveryDistanceKm: 0,
+      binding: dto.binding ?? false,
+      stapling: dto.stapling ?? false,
+      lamination: dto.lamination ?? false,
+      deliverySpeed: dto.deliverySpeed ?? DeliverySpeed.STANDARD,
+      deliveryDistanceKm: dto.deliveryDistanceKm ?? 0,
     });
-    const printSubtotal = quote.printing;
-    const deliveryFee = quote.delivery;
+    const printSubtotal = Number((quote.printing + quote.finishing).toFixed(2));
+    const deliveryFee = Number((quote.delivery + quote.express).toFixed(2));
     const platformFee = Number((quote.total - printSubtotal - deliveryFee).toFixed(2));
     const commission = Number((printSubtotal * 0.1).toFixed(2));
     const total = quote.total;
@@ -217,8 +285,8 @@ export class CustomerController {
     const pin = randomBytes(3).toString('hex').toUpperCase();
     const pickupCode = randomBytes(3).toString('hex').toUpperCase();
     const order = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.order.create({ data: { id: randomUUID(), reference, customerId: request.user.id, shopId: dto.shopId, status: 'PENDING_ACCEPTANCE', currency: 'LKR', printSubtotal, deliveryFee, platformFee, total, commission, deliveryAddress: { line: dto.deliveryAddress }, instructions: dto.instructions, deliveryPinHash: createHash('sha256').update(pin).digest('hex'), pickupCodeHash: createHash('sha256').update(pickupCode).digest('hex'), clientKey: dto.clientKey } });
-      await tx.orderItem.create({ data: { id: randomUUID(), orderId: created.id, documentId: dto.documentId, paperSize: dto.paperSize, colour: dto.colour, duplex: dto.duplex, copies: dto.copies, pageRange: 'ALL', printedSides: dto.printedSides, orientation: 'PORTRAIT', unitPrice: printSubtotal / dto.copies, total: printSubtotal } });
+      const created = await tx.order.create({ data: { id: randomUUID(), reference, customerId: request.user.id, shopId: dto.shopId, status: 'PENDING_ACCEPTANCE', currency: 'LKR', printSubtotal, deliveryFee, platformFee, total, commission, deliverySpeed: dto.deliverySpeed ?? DeliverySpeed.STANDARD, deliveryDistanceKm: dto.deliveryDistanceKm ?? 0, deliveryAddress: { line: dto.deliveryAddress }, instructions: dto.instructions, deliveryPinHash: createHash('sha256').update(pin).digest('hex'), pickupCodeHash: createHash('sha256').update(pickupCode).digest('hex'), clientKey: dto.clientKey } });
+      await tx.orderItem.create({ data: { id: randomUUID(), orderId: created.id, documentId: dto.documentId, paperSize: dto.paperSize, colour: dto.colour, duplex: dto.duplex, copies: dto.copies, pageRange: 'ALL', printedSides: dto.printedSides, orientation: 'PORTRAIT', binding: dto.binding ? 'BINDING' : null, stapling: dto.stapling ?? false, lamination: dto.lamination ?? false, unitPrice: printSubtotal / dto.copies, total: printSubtotal } });
       await tx.orderStatusHistory.create({ data: { id: randomUUID(), orderId: created.id, status: 'PENDING_ACCEPTANCE', actorId: request.user.id } });
       return created;
     });

@@ -144,20 +144,49 @@ function Dashboard() {
   return <section className="shop-content"><div className="shop-heading"><div><p>Today</p><h1>Business overview</h1></div><button className="open-toggle" type="button" onClick={toggleAvailability}><i className={status?.isOpen ? 'open' : ''} />{status?.isOpen ? 'Accepting orders' : 'Closed to orders'}</button></div><div className="dashboard-grid"><article className="status-card"><span className="status-card-label">Verification</span><strong>{status?.status === 'APPROVED' ? 'Approved' : 'Under review'}</strong><p>{status?.status === 'APPROVED' ? 'Your shop is eligible for customer discovery.' : 'Your application is waiting for admin approval.'}</p></article><article className="production-card"><div><span className="production-icon">◫</span><div><strong>{orders.length ? `${orders.length} incoming orders` : 'No incoming orders'}</strong><p>Production activity appears here.</p></div></div></article></div></section>;
 }
 
+type ShopOrder = {
+  id: string;
+  reference: string;
+  status: string;
+  OrderItem?: { documentId: string; Document: { name: string } }[];
+};
+
 function OrdersPage({ orders }: { orders: { id: string; reference: string; status: string }[] }) {
-  const [liveOrders, setLiveOrders] = useState<{ id: string; reference: string; status: string }[]>(orders);
+  const [liveOrders, setLiveOrders] = useState<ShopOrder[]>(orders);
+  const [documentError, setDocumentError] = useState('');
   useEffect(() => {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
     const token = window.sessionStorage.getItem('shop-access-token');
-    fetch(`${apiUrl}/shop/me/orders`, { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string }[] }> : Promise.reject()).then((result) => setLiveOrders(result.data)).catch(() => setLiveOrders([]));
+    fetch(`${apiUrl}/shop/me/orders`, { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.ok ? response.json() as Promise<{ data: ShopOrder[] }> : Promise.reject()).then((result) => setLiveOrders(result.data)).catch(() => setLiveOrders([]));
   }, []);
+  const previewDocument = async (order: ShopOrder, documentId: string) => {
+    const previewWindow = window.open('about:blank', '_blank');
+    if (!previewWindow) {
+      setDocumentError('Allow pop-ups for QuickDoc to preview an order document.');
+      return;
+    }
+    setDocumentError('');
+    try {
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1').replace(/\/+$/, '');
+      const token = window.sessionStorage.getItem('shop-access-token');
+      const response = await fetch(`${apiUrl}/shop/me/orders/${order.id}/documents/${documentId}/preview-url`, { headers: { Authorization: `Bearer ${token ?? ''}` } });
+      if (!response.ok) throw new Error('This order document could not be opened.');
+      const result = await response.json() as { data: { previewUrl: string } };
+      previewWindow.opener = null;
+      previewWindow.location.href = result.data.previewUrl;
+    } catch (error) {
+      previewWindow.close();
+      setDocumentError(error instanceof Error ? error.message : 'This order document could not be opened.');
+    }
+  };
+
   const transition = async (id: string, status: 'ACCEPTED' | 'REJECTED' | 'PRINTING' | 'READY_FOR_PICKUP') => {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
     const token = window.sessionStorage.getItem('shop-access-token');
     const response = await fetch(`${apiUrl}/shop/me/orders/${id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ status }) });
     if (response.ok) setLiveOrders((items) => items.map((item) => item.id === id ? { ...item, status } : item));
   };
-  return <section className="shop-content"><div className="shop-heading"><div><p>Production</p><h1>Incoming orders</h1></div></div>{liveOrders.length ? liveOrders.map((order) => <div className="shop-list-row" key={order.id}><div><strong>{order.reference}</strong><small>{order.status}</small></div><div className="order-actions">{order.status === 'PENDING_ACCEPTANCE' && <><button type="button" onClick={() => transition(order.id, 'ACCEPTED')}>Accept</button><button type="button" onClick={() => transition(order.id, 'REJECTED')}>Reject</button></>}{order.status === 'ACCEPTED' && <button type="button" onClick={() => transition(order.id, 'PRINTING')}>Start printing</button>}{order.status === 'PRINTING' && <button type="button" onClick={() => transition(order.id, 'READY_FOR_PICKUP')}>Mark ready</button>}</div></div>) : <div className="empty-workspace"><h2>No orders to process</h2><p>Accepted and in-progress orders will appear here.</p></div>}</section>;
+  return <section className="shop-content"><div className="shop-heading"><div><p>Production</p><h1>Incoming orders</h1></div></div>{documentError && <p className="document-error" role="alert">{documentError}</p>}{liveOrders.length ? liveOrders.map((order) => <div className="shop-list-row" key={order.id}><div><strong>{order.reference}</strong><small>{order.status}</small>{order.OrderItem?.map((item) => <button className="order-document-button" key={item.documentId} type="button" onClick={() => void previewDocument(order, item.documentId)}>Preview {item.Document.name}</button>)}</div><div className="order-actions">{order.status === 'PENDING_ACCEPTANCE' && <><button type="button" onClick={() => transition(order.id, 'ACCEPTED')}>Accept</button><button type="button" onClick={() => transition(order.id, 'REJECTED')}>Reject</button></>}{order.status === 'ACCEPTED' && <button type="button" onClick={() => transition(order.id, 'PRINTING')}>Start printing</button>}{order.status === 'PRINTING' && <button type="button" onClick={() => transition(order.id, 'READY_FOR_PICKUP')}>Mark ready</button>}</div></div>) : <div className="empty-workspace"><h2>No orders to process</h2><p>Accepted and in-progress orders will appear here.</p></div>}</section>;
 }
 
 function ServicesPage() {

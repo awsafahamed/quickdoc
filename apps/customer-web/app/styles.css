@@ -209,6 +209,37 @@ h3 { margin: 22px 0 9px; font-size: 21px; }
   .marketing-hero__copy { max-width: 54ch; }
   .print-preview { margin-top: 40px; }
 }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #155eef55; outline-offset: 3px; }
+.upload-box { position: relative; overflow: hidden; }
+.upload-box input { position: absolute; inset: 0; display: block; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.upload-box:focus-within { outline: 3px solid #155eef55; outline-offset: 3px; }
+.pdf-uploaded { display: grid; gap: 12px; }
+.pdf-uploaded .uploaded-file { margin: 0; }
+.pdf-preview { overflow: hidden; background: #f3f5f8; border: 1px solid var(--line); border-radius: 10px; }
+.pdf-preview__bar { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 13px; background: #fff; border-bottom: 1px solid var(--line); }
+.pdf-preview__bar strong { font-size: 12px; }
+.pdf-preview__bar a { color: var(--blue); font-size: 12px; font-weight: 700; text-underline-offset: 3px; }
+.pdf-preview iframe { display: block; width: 100%; height: min(64vh, 680px); min-height: 340px; background: #f3f5f8; border: 0; }
+.flow-error { margin: 14px 0 0; color: #a34116; font-size: 12px; line-height: 1.5; }
+.checkout-document { display: flex; align-items: center; gap: 9px; margin-top: 16px; padding: 11px; color: var(--blue); background: #f5f8fe; border: 1px solid #e4ecfa; border-radius: 8px; }
+.checkout-document > span { display: grid; min-width: 0; gap: 3px; }
+.checkout-document strong { overflow: hidden; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.checkout-document small { color: var(--muted); font-size: 10px; }
+.request-form .field-label textarea { width: 100%; resize: vertical; padding: 11px 12px; color: var(--ink); background: #fff; border: 1px solid #d8dfe7; border-radius: 7px; outline: none; font-weight: 400; line-height: 1.45; }
+.request-form .field-label textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #155eef1a; }
+.field-label__optional { color: #8b96a1; font-weight: 500; }
+.checkout-note { margin: 16px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.document-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 16px; margin-left: auto; }
+.document-actions button:disabled { cursor: wait; opacity: .6; }
+.profile-saved { margin: 0; color: var(--green); font-size: 12px; }
+.stepper__labels { width: min(100%, 380px); }
+@media (max-width: 680px) {
+  .pdf-preview iframe { height: 58vh; min-height: 260px; }
+  .pdf-preview__bar { align-items: flex-start; }
+  .shop-toolbar { gap: 10px; }
+  .shop-toolbar span { text-align: right; }
+  .document-actions { gap: 10px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .marketing-button { transition: none; }
 }

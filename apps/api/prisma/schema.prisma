@@ -166,6 +166,8 @@ model Order {
   platformFee          Decimal                @db.Decimal(12, 2)
   total                Decimal                @db.Decimal(12, 2)
   commission           Decimal                @db.Decimal(12, 2)
+  deliverySpeed        String                 @default("STANDARD")
+  deliveryDistanceKm   Decimal                @default(0) @db.Decimal(6, 2)
   deliveryAddress      Json
   instructions         String?
   deliveryPinHash      String
@@ -346,6 +348,8 @@ model OrderItem {
   printedSides Int
   orientation  String
   binding      String?
+  stapling     Boolean  @default(false)
+  lamination   Boolean  @default(false)
   unitPrice    Decimal  @db.Decimal(12, 2)
   total        Decimal  @db.Decimal(12, 2)
   Document     Document @relation(fields: [documentId], references: [id])

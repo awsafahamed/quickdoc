@@ -3,6 +3,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { IsBoolean, IsNumber, IsOptional, IsString, Length, Min } from 'class-validator';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { PrivateObjectStorageService } from '../storage/private-object-storage.service';
 
 class ShopProfileDto {
   @IsString() @Length(2, 120) name!: string;
@@ -34,7 +35,10 @@ class StaffDto {
 @Controller('shop/me')
 @UseGuards(AuthGuard('jwt'))
 export class ShopPortalController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: PrivateObjectStorageService,
+  ) {}
 
   private async shopForOwner(userId: string) {
     const shop = await this.prisma.shop.findFirst({ where: { ownerId: userId } });
@@ -118,6 +122,22 @@ export class ShopPortalController {
     const shop = await this.shopForOwner(req.user.id);
     return { data: await this.prisma.order.findMany({ where: { shopId: shop.id }, include: { customer: true, OrderItem: { include: { Document: true } }, OrderStatusHistory: { orderBy: { createdAt: 'desc' } }, DeliveryAssignment: true, Payment: true }, orderBy: { createdAt: 'desc' } }) };
   }
+  @Get('orders/:orderId/documents/:documentId/preview-url')
+  async orderDocumentPreviewUrl(
+    @Req() req: { user: { id: string } },
+    @Param('orderId') orderId: string,
+    @Param('documentId') documentId: string,
+  ) {
+    const shop = await this.shopForOwner(req.user.id);
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, shopId: shop.id },
+      include: { OrderItem: { where: { documentId }, include: { Document: true } } },
+    });
+    const document = order?.OrderItem[0]?.Document;
+    if (!document) throw new BadRequestException('Document was not found for this shop order');
+    return { data: { previewUrl: await this.storage.createPreviewUrl(document.objectKey, document.name) } };
+  }
+
 
   @Post('orders/:id/transition')
   async transition(@Req() req: { user: { id: string } }, @Param('id') id: string, @Body() body: { status: 'ACCEPTED' | 'REJECTED' | 'PRINTING' | 'READY_FOR_PICKUP' | 'CANCELLED'; reason?: string }) {
