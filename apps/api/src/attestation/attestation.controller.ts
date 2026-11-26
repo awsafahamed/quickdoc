@@ -31,10 +31,81 @@ export class AttestationController {
     return { data: await this.catalogue.list() };
   }
 
+  @Get('marketplace-services')
+  async listMarketplaceServices() {
+    const [catalogue, offers] = await Promise.all([
+      this.catalogue.list(),
+      this.prisma.agentService.findMany({
+        where: {
+          isCustom: true,
+          enabled: true,
+          reviewStatus: 'APPROVED',
+          agent: { status: 'APPROVED', isOpen: true },
+        },
+        include: { agent: { select: { id: true, businessName: true } } },
+        orderBy: [{ name: 'asc' }, { agentId: 'asc' }],
+      }),
+    ]);
+    return {
+      data: [
+        ...catalogue,
+        ...offers.map((offer) => ({
+          id: offer.id,
+          name: offer.name,
+          description: offer.description,
+          estimatedDays: offer.estimatedDays,
+          serviceFee: Number(offer.price),
+          requiresOriginals: false,
+          requiredOriginals: [],
+          supportingDocuments: [],
+          providerAgentId: offer.agent.id,
+          providerName: offer.agent.businessName,
+        })),
+      ],
+    };
+  }
+
   @Post('quote')
   async createQuote(@Body() request: AttestationQuoteDto) {
+    const service = await this.prisma.platformCatalogService.findFirst({
+      where: { code: request.serviceId, enabled: true },
+      select: { code: true },
+    });
+    if (!service && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request.serviceId)) {
+      throw new NotFoundException('Attestation service was not found');
+    }
+    const serviceFilter = service
+      ? { code: service.code }
+      : { id: request.serviceId, isCustom: true };
+    const agent = await this.prisma.agentProfile.findFirst({
+      where: {
+        id: request.agentId,
+        status: 'APPROVED',
+        isOpen: true,
+        services: {
+          some: { ...serviceFilter, enabled: true, reviewStatus: 'APPROVED' },
+        },
+      },
+      select: {
+        services: {
+          where: { ...serviceFilter, enabled: true, reviewStatus: 'APPROVED' },
+          select: { price: true },
+        },
+      },
+    });
+    const offer = agent?.services[0];
+    if (!offer) {
+      throw new BadRequestException('This agent is not available for the selected service');
+    }
+
     return {
-      data: await this.catalogue.quote(request.serviceId, request.pickupDistanceKm, request.returnDistanceKm, request.express),
+      data: await this.catalogue.quote(
+        request.serviceId,
+        request.pickupDistanceKm,
+        request.returnDistanceKm,
+        request.express,
+        Number(offer.price),
+      ),
     };
   }
 
@@ -44,18 +115,25 @@ export class AttestationController {
       where: { code: query.serviceId, enabled: true },
       select: { code: true },
     });
-    if (!service) throw new NotFoundException('Attestation service was not found');
+    if (!service && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(query.serviceId)) {
+      throw new NotFoundException('Attestation service was not found');
+    }
+    const serviceFilter = service
+      ? { code: service.code }
+      : { id: query.serviceId, isCustom: true };
 
     const agents = await this.prisma.agentProfile.findMany({
       where: {
         status: 'APPROVED',
         isOpen: true,
-        services: { some: { code: service.code, enabled: true } },
+        services: {
+          some: { ...serviceFilter, enabled: true, reviewStatus: 'APPROVED' },
+        },
       },
       include: {
         services: {
-          where: { code: service.code, enabled: true },
-          select: { estimatedDays: true },
+          where: { ...serviceFilter, enabled: true, reviewStatus: 'APPROVED' },
+          select: { estimatedDays: true, price: true },
         },
       },
       orderBy: { businessName: 'asc' },
@@ -67,6 +145,7 @@ export class AttestationController {
         businessName: agent.businessName,
         address: agent.address,
         estimatedDays: agent.services[0]?.estimatedDays ?? 0,
+        serviceFee: Number(agent.services[0]?.price ?? 0),
       })),
     };
   }
@@ -79,20 +158,35 @@ export class AttestationController {
   ) {
     const service = await this.prisma.platformCatalogService.findFirst({
       where: { code: dto.serviceId, enabled: true },
-      select: { code: true, estimatedDays: true },
+      select: { code: true },
     });
-    if (!service) throw new NotFoundException('Attestation service was not found');
+    if (!service && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(dto.serviceId)) {
+      throw new NotFoundException('Attestation service was not found');
+    }
+    const serviceFilter = service
+      ? { code: service.code }
+      : { id: dto.serviceId, isCustom: true };
 
     const agent = await this.prisma.agentProfile.findFirst({
       where: {
         id: dto.agentId,
         status: 'APPROVED',
         isOpen: true,
-        services: { some: { code: service.code, enabled: true } },
+        services: {
+          some: { ...serviceFilter, enabled: true, reviewStatus: 'APPROVED' },
+        },
       },
-      select: { id: true, businessName: true },
+      select: {
+        id: true,
+        businessName: true,
+        services: {
+          where: { ...serviceFilter, enabled: true, reviewStatus: 'APPROVED' },
+          select: { code: true, name: true, price: true, estimatedDays: true },
+        },
+      },
     });
-    if (!agent) {
+    const offer = agent?.services[0];
+    if (!agent || !offer) {
       throw new BadRequestException('This agent is not available for the selected service');
     }
 
@@ -104,13 +198,14 @@ export class AttestationController {
     }
 
     const quote = await this.catalogue.quote(
-      service.code,
+      offer.code,
       dto.pickupDistanceKm,
       dto.returnDistanceKm,
       dto.express,
+      Number(offer.price),
     );
     const estimatedReadyAt = new Date(pickupScheduledAt);
-    estimatedReadyAt.setUTCDate(estimatedReadyAt.getUTCDate() + service.estimatedDays);
+    estimatedReadyAt.setUTCDate(estimatedReadyAt.getUTCDate() + offer.estimatedDays);
     const id = randomUUID();
     const reference = `AT-${randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
 
@@ -121,7 +216,8 @@ export class AttestationController {
           reference,
           agentId: agent.id,
           customerId: request.user.id,
-          serviceCode: service.code,
+          serviceCode: offer.code,
+          serviceName: offer.name,
           status: 'PICKUP_SCHEDULED',
           pickupAddress: { line: dto.pickupAddress },
           returnAddress: { line: dto.returnAddress },
@@ -132,6 +228,7 @@ export class AttestationController {
           express: dto.express,
           pricingSnapshot: {
             serviceFee: quote.serviceFee,
+            serviceName: offer.name,
             pickupDelivery: quote.pickupDelivery,
             returnDelivery: quote.returnDelivery,
             expressFee: quote.expressFee,

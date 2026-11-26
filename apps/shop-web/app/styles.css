@@ -285,6 +285,17 @@ a { color: inherit; }
 .inline-create > div strong { font-size: 10px; }
 .inline-create > div small { color: var(--muted); font-size: 9px; }
 .inline-create select { min-width: 145px; height: 33px; padding: 0 8px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; font-size: 10px; }
+.shop-custom-service-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end; gap: 12px; padding: 16px 0; border-top: 1px solid var(--line); }
+.shop-custom-service-form > div { grid-column: 1 / -1; }
+.shop-custom-service-form h3 { margin: 0; font-size: 12px; }
+.shop-custom-service-form p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.shop-custom-service-form label, .shop-pricing-editor > label { display: grid; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 650; }
+.shop-custom-service-form input { width: 100%; min-width: 0; height: 33px; padding: 0 8px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; font-size: 10px; }
+.shop-custom-service-form button { justify-self: start; }
+.shop-pricing-editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 11px; padding: 14px 0 6px; }
+.shop-pricing-editor > label { align-content: start; }
+.shop-pricing-editor .price-input { width: 100%; }
+.shop-pricing-editor > button { justify-self: start; }
 .inventory-summary { display: flex; gap: 12px; margin-bottom: 14px; }
 .inventory-summary > div { display: grid; min-width: 175px; gap: 7px; padding: 13px 15px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; }
 .inventory-summary span { color: var(--muted); font-size: 9px; }

@@ -1,6 +1,7 @@
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { IsBoolean, IsEmail, IsIn, IsNumber, IsOptional, IsString, Length, Matches, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ArrayMaxSize, IsArray, IsBoolean, IsEmail, IsIn, IsNumber, IsOptional, IsString, Length, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { Prisma, type Order, type Shop } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -25,7 +26,39 @@ class ShopServiceDto {
   @IsString() code!: string;
   @IsBoolean() enabled!: boolean;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) price!: number;
+  @IsOptional() @IsString() @Length(2, 120) name?: string;
+  @IsOptional() @IsString() @MaxLength(1000) description?: string;
 }
+
+class CustomShopServiceDto {
+  @IsString() @Length(3, 120) name!: string;
+  @IsOptional() @IsString() @MaxLength(1000) description?: string;
+  @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) price!: number;
+}
+
+class ShopPriceDto {
+  @IsIn(['A4', 'A3', 'A5']) paperSize!: string;
+  @IsBoolean() colour!: boolean;
+  @IsBoolean() duplex!: boolean;
+  @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(100000) pricePerSide!: number;
+}
+
+class ShopPricingDto {
+  @IsArray() @ArrayMaxSize(12) @ValidateNested({ each: true }) @Type(() => ShopPriceDto)
+  prices!: ShopPriceDto[];
+}
+
+const platformShopServices: Record<string, string> = {
+  PAPER_A4: 'A4 paper',
+  PAPER_A3: 'A3 paper',
+  PAPER_A5: 'A5 paper',
+  BLACK_WHITE: 'Black & white',
+  COLOUR: 'Colour printing',
+  DUPLEX: 'Double-sided',
+  BINDING: 'Binding',
+  STAPLING: 'Stapling',
+  LAMINATION: 'Lamination',
+};
 
 class StaffDto {
   @IsEmail() email!: string;
@@ -172,7 +205,72 @@ export class ShopPortalController {
   @Post('services')
   async upsertService(@Req() req: { user: { id: string } }, @Body() dto: ShopServiceDto) {
     const shop = await this.shopForOwner(req.user.id);
-    return { data: await this.prisma.shopService.upsert({ where: { shopId_code: { shopId: shop.id, code: dto.code } }, create: { shopId: shop.id, code: dto.code, enabled: dto.enabled, price: dto.price }, update: { enabled: dto.enabled, price: dto.price } }) };
+    const existing = await this.prisma.shopService.findUnique({
+      where: { shopId_code: { shopId: shop.id, code: dto.code } },
+    });
+    if (existing?.isCustom) {
+      return {
+        data: await this.prisma.shopService.update({
+          where: { id: existing.id },
+          data: {
+            name: dto.name?.trim() ?? existing.name,
+            description: dto.description?.trim() ?? existing.description,
+            enabled: dto.enabled,
+            price: dto.price,
+            reviewStatus: 'PENDING',
+          },
+        }),
+      };
+    }
+    const name = platformShopServices[dto.code];
+    if (!name) {
+      throw new BadRequestException('Add new services using the custom service form');
+    }
+    return {
+      data: await this.prisma.shopService.upsert({
+        where: { shopId_code: { shopId: shop.id, code: dto.code } },
+        create: {
+          shopId: shop.id,
+          code: dto.code,
+          name,
+          enabled: dto.enabled,
+          price: dto.price,
+          reviewStatus: 'APPROVED',
+        },
+        update: { enabled: dto.enabled, price: dto.price },
+      }),
+    };
+  }
+
+  @Post('services/custom')
+  async createCustomService(
+    @Req() req: { user: { id: string } },
+    @Body() dto: CustomShopServiceDto,
+  ) {
+    const shop = await this.shopForOwner(req.user.id);
+    const code = dto.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+    if (code.length < 2) {
+      throw new BadRequestException('Service name must include at least two letters or numbers');
+    }
+    const existing = await this.prisma.shopService.findUnique({
+      where: { shopId_code: { shopId: shop.id, code } },
+      select: { id: true },
+    });
+    if (existing) throw new ConflictException('A service with this name already exists');
+    return {
+      data: await this.prisma.shopService.create({
+        data: {
+          shopId: shop.id,
+          code,
+          name: dto.name.trim(),
+          description: dto.description?.trim() ?? '',
+          price: dto.price,
+          enabled: true,
+          isCustom: true,
+          reviewStatus: 'PENDING',
+        },
+      }),
+    };
   }
 
   @Delete('services/:code')
@@ -180,6 +278,51 @@ export class ShopPortalController {
     const shop = await this.shopForOwner(req.user.id);
     await this.prisma.shopService.delete({ where: { shopId_code: { shopId: shop.id, code } } });
     return { data: { deleted: true } };
+  }
+
+  @Get('pricing')
+  async pricing(@Req() req: { user: { id: string } }) {
+    const shop = await this.shopForOwner(req.user.id);
+    return {
+      data: await this.prisma.shopPrice.findMany({
+        where: { shopId: shop.id },
+        orderBy: [{ paperSize: 'asc' }, { colour: 'asc' }, { duplex: 'asc' }],
+      }),
+    };
+  }
+
+  @Post('pricing')
+  async savePricing(
+    @Req() req: { user: { id: string } },
+    @Body() dto: ShopPricingDto,
+  ) {
+    const shop = await this.shopForOwner(req.user.id);
+    const keys = dto.prices.map((price) => `${price.paperSize}:${price.colour}:${price.duplex}`);
+    if (new Set(keys).size !== keys.length) {
+      throw new BadRequestException('Each paper, colour and side combination can only be saved once');
+    }
+
+    return {
+      data: await this.prisma.$transaction(
+        dto.prices.map((price) => this.prisma.shopPrice.upsert({
+          where: {
+            shopId_paperSize_colour_duplex: {
+              shopId: shop.id,
+              paperSize: price.paperSize,
+              colour: price.colour,
+              duplex: price.duplex,
+            },
+          },
+          create: {
+            id: randomUUID(),
+            shopId: shop.id,
+            ...price,
+            updatedAt: new Date(),
+          },
+          update: { pricePerSide: price.pricePerSide, updatedAt: new Date() },
+        })),
+      ),
+    };
   }
 
   @Get('hours')

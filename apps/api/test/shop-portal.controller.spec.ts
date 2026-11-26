@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { ShopPortalController } from '../src/shops/shop-portal.controller';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { PrivateObjectStorageService } from '../src/storage/private-object-storage.service';
@@ -98,6 +98,69 @@ describe('shop order transitions', () => {
       'order-id',
       { status: 'REJECTED', reason: '  ' },
     )).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('shop-defined service offers', () => {
+  const request = { user: { id: 'shop-owner-id' } };
+
+  it('creates custom services as pending admin review', async () => {
+    const prisma = {
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shopService: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'offer-id' }),
+      },
+    } as unknown as PrismaService;
+    const storage = {} as PrivateObjectStorageService;
+    const controller = new ShopPortalController(prisma, storage);
+
+    await controller.createCustomService(request, {
+      name: 'Premium Document Binding',
+      description: 'Hard cover finish',
+      price: 850,
+    });
+
+    expect(prisma.shopService.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        shopId: 'shop-id',
+        code: 'premium-document-binding',
+        name: 'Premium Document Binding',
+        description: 'Hard cover finish',
+        price: 850,
+        enabled: true,
+        isCustom: true,
+        reviewStatus: 'PENDING',
+      }),
+    });
+  });
+
+  it('rejects duplicate custom offer codes', async () => {
+    const prisma = {
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shopService: { findUnique: jest.fn().mockResolvedValue({ id: 'existing-offer' }) },
+    } as unknown as PrismaService;
+    const controller = new ShopPortalController(prisma, {} as PrivateObjectStorageService);
+
+    await expect(controller.createCustomService(request, {
+      name: 'Premium Document Binding',
+      price: 850,
+    })).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('rejects duplicate pricing combinations before writing', async () => {
+    const prisma = {
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      $transaction: jest.fn(),
+    } as unknown as PrismaService;
+    const controller = new ShopPortalController(prisma, {} as PrivateObjectStorageService);
+    const prices = [
+      { paperSize: 'A4', colour: false, duplex: true, pricePerSide: 0.75 },
+      { paperSize: 'A4', colour: false, duplex: true, pricePerSide: 0.9 },
+    ];
+
+    await expect(controller.savePricing(request, { prices })).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });

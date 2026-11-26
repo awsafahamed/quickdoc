@@ -4,6 +4,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -118,6 +119,11 @@ class OrderStatusDto {
 class AgentStatusDto {
   @IsIn(approvalStatuses)
   status!: (typeof approvalStatuses)[number];
+}
+
+class ProviderServiceReviewDto {
+  @IsIn(['APPROVED', 'REJECTED'])
+  status!: 'APPROVED' | 'REJECTED';
 }
 
 class PlatformSettingsDto {
@@ -609,6 +615,41 @@ export class AdminController {
       }),
     ]);
     return { data: { shopServices, agentServices } };
+  }
+
+  @Patch('services/:providerType/:id/review')
+  async reviewProviderService(
+    @Param('providerType') providerType: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: ProviderServiceReviewDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    this.assertAdmin(request);
+    if (providerType !== 'shops' && providerType !== 'agents') {
+      throw new BadRequestException('Provider type must be shops or agents');
+    }
+
+    const updated = await this.prisma.$transaction(async (transaction) => {
+      const current = providerType === 'shops'
+        ? await transaction.shopService.findUnique({ where: { id }, select: { id: true, isCustom: true } })
+        : await transaction.agentService.findUnique({ where: { id }, select: { id: true, isCustom: true } });
+      if (!current?.isCustom) throw new NotFoundException('Custom provider service was not found');
+
+      const service = providerType === 'shops'
+        ? await transaction.shopService.update({ where: { id }, data: { reviewStatus: body.status } })
+        : await transaction.agentService.update({ where: { id }, data: { reviewStatus: body.status } });
+      await transaction.auditLog.create({
+        data: {
+          id: randomUUID(),
+          actorId: request.user.id,
+          action: `PROVIDER_SERVICE_${body.status}`,
+          entityId: id,
+        },
+      });
+      return service;
+    });
+
+    return { data: updated };
   }
 
   @Get('catalog')

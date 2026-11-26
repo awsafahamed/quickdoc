@@ -16,6 +16,8 @@ const SHOPS: PrintShop[] = [
     capabilities: ['A4', 'A3', 'A5', 'COLOUR', 'BINDING', 'STAPLING', 'LAMINATION'],
     supportedPaperSizes: ['A4', 'A3', 'A5'],
     colourPrinting: true,
+    services: [],
+    printPrices: [],
   },
   {
     id: 'shop-jlt',
@@ -30,6 +32,8 @@ const SHOPS: PrintShop[] = [
     capabilities: ['A4', 'A3', 'COLOUR', 'BINDING', 'STAPLING'],
     supportedPaperSizes: ['A4', 'A3'],
     colourPrinting: true,
+    services: [],
+    printPrices: [],
   },
 ];
 
@@ -45,22 +49,41 @@ export class ShopsService {
         isOpen: true,
         ...(normalizedSearch ? { OR: [{ name: { contains: normalizedSearch, mode: 'insensitive' } }, { address: { contains: normalizedSearch, mode: 'insensitive' } }] } : {}),
       },
-      include: { services: true },
+      include: { services: true, ShopPrice: true },
     });
-    return shops.map((shop): PrintShop => ({
-      id: shop.id,
-      name: shop.name,
-      description: 'Verified printing partner.',
-      address: shop.address,
-      distanceKm: 0,
-      rating: 0,
-      reviewCount: 0,
-      estimatedMinutes: 45,
-      operatingStatus: 'OPEN',
-      capabilities: shop.services.filter((service) => service.enabled).map((service) => service.code),
-      supportedPaperSizes: shop.services.filter((service) => service.enabled).flatMap((service) => service.code.startsWith('PAPER_') ? [service.code.replace('PAPER_', '')] : []),
-      colourPrinting: shop.services.some((service) => service.enabled && (service.code === 'COLOUR')),
-    })).filter((shop) => {
+    return shops.map((shop): PrintShop => {
+      const availableServices = shop.services.filter(
+        (service) => service.enabled && service.reviewStatus === 'APPROVED',
+      );
+      return {
+        id: shop.id,
+        name: shop.name,
+        description: 'Verified printing partner.',
+        address: shop.address,
+        distanceKm: 0,
+        rating: 0,
+        reviewCount: 0,
+        estimatedMinutes: 45,
+        operatingStatus: 'OPEN',
+        capabilities: availableServices.map((service) => service.code),
+        supportedPaperSizes: availableServices.flatMap((service) => service.code.startsWith('PAPER_') ? [service.code.replace('PAPER_', '')] : []),
+        colourPrinting: availableServices.some((service) => service.code === 'COLOUR'),
+        services: availableServices
+          .filter((service) => service.isCustom)
+          .map((service) => ({
+            code: service.code,
+            name: service.name,
+            description: service.description,
+            price: Number(service.price),
+          })),
+        printPrices: shop.ShopPrice.map((price) => ({
+          paperSize: price.paperSize,
+          colour: price.colour,
+          duplex: price.duplex,
+          pricePerSide: Number(price.pricePerSide),
+        })),
+      };
+    }).filter((shop) => {
       const matchesSearch = !normalizedSearch
         || shop.name.toLowerCase().includes(normalizedSearch)
         || shop.address.toLowerCase().includes(normalizedSearch);

@@ -57,11 +57,15 @@ model AgentService {
   agent     AgentProfile @relation(fields: [agentId], references: [id], onDelete: Cascade)
   code      String
   name      String
+  description String     @default("") @db.VarChar(1000)
   price     Decimal      @db.Decimal(12, 2)
   estimatedDays Int
   enabled   Boolean      @default(true)
+  isCustom  Boolean      @default(false)
+  reviewStatus ServiceReviewStatus @default(APPROVED)
 
   @@unique([agentId, code])
+  @@index([reviewStatus, enabled])
 }
 
 model AttestationJob {
@@ -71,6 +75,7 @@ model AttestationJob {
   agent            AgentProfile  @relation(fields: [agentId], references: [id])
   customerId       String        @db.Uuid
   serviceCode      String
+  serviceName      String?
   status           String        @default("PICKUP_SCHEDULED")
   pickupAddress    Json
   returnAddress    Json
@@ -141,14 +146,19 @@ model ShopStaff {
 }
 
 model ShopService {
-  id      String  @id @default(uuid()) @db.Uuid
-  shopId  String  @db.Uuid
-  code    String
-  enabled Boolean @default(true)
-  price   Decimal @default(0) @db.Decimal(12, 2)
-  shop    Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  id           String              @id @default(uuid()) @db.Uuid
+  shopId       String              @db.Uuid
+  code         String
+  name         String              @default("") @db.VarChar(120)
+  description  String              @default("") @db.VarChar(1000)
+  enabled      Boolean             @default(true)
+  price        Decimal             @default(0) @db.Decimal(12, 2)
+  isCustom     Boolean             @default(false)
+  reviewStatus ServiceReviewStatus @default(APPROVED)
+  shop         Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@unique([shopId, code])
+  @@index([reviewStatus, enabled])
 }
 
 model ShopOpeningHour {
@@ -202,6 +212,7 @@ model Order {
   pinAttempts          Int                    @default(0)
   clientKey            String?                @db.Uuid
   checkoutFingerprint  String?
+  shopServiceSnapshot  Json?
   DeliveryAssignment   DeliveryAssignment?
   DeliveryOffer        DeliveryOffer[]
   FinancialLedgerEntry FinancialLedgerEntry[]
@@ -575,6 +586,12 @@ enum ApprovalStatus {
   APPROVED
   REJECTED
   SUSPENDED
+}
+
+enum ServiceReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum OrderStatus {

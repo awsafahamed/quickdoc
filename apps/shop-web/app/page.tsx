@@ -69,7 +69,16 @@ type Settlement = {
   updatedAt: string;
 };
 
-type Service = { code: string; enabled: boolean; price: number | string };
+type Service = {
+  code: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  price: number | string;
+  isCustom: boolean;
+  reviewStatus: 'PENDING' | 'APPROVED' | 'REJECTED';
+};
+type ShopPrice = { paperSize: string; colour: boolean; duplex: boolean; pricePerSide: number | string };
 type InventoryItem = {
   id: string;
   name: string;
@@ -112,6 +121,17 @@ const serviceOptions = [
   ['BINDING', 'Binding'],
   ['LAMINATION', 'Lamination'],
 ] as const;
+const printPriceOptions = (['A4', 'A3', 'A5'] as const).flatMap((paperSize) =>
+  ([false, true] as const).flatMap((colour) =>
+    ([false, true] as const).map((duplex) => ({
+      paperSize,
+      colour,
+      duplex,
+      key: `${paperSize}:${colour}:${duplex}`,
+      label: `${paperSize} · ${colour ? 'Colour' : 'Black & white'} · ${duplex ? 'Double-sided' : 'Single-sided'}`,
+    })),
+  ),
+);
 const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 async function api<T>(path: string, options: RequestInit & { json?: unknown } = {}): Promise<T> {
@@ -507,17 +527,27 @@ function DeliveryPage() {
 
 function ServicesPage() {
   const { data: services, loading, error, reload } = useRemote<Service[]>('/shop/me/services', []);
+  const { data: printPrices, loading: pricingLoading, error: pricingError, reload: reloadPricing } = useRemote<ShopPrice[]>('/shop/me/pricing', []);
   const [drafts, setDrafts] = useState<Record<string, Service>>({});
+  const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
   const [newCode, setNewCode] = useState<string>(serviceOptions[0][0]);
-  const [newPrice, setNewPrice] = useState('0');
+  const [customName, setCustomName] = useState('');
+  const [customDescription, setCustomDescription] = useState('');
+  const [customPrice, setCustomPrice] = useState('');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [actionError, setActionError] = useState('');
   const savedCodes = new Set(services.map((service) => service.code));
+  useEffect(() => {
+    setPriceDrafts(Object.fromEntries(printPrices.map((price) => [
+      `${price.paperSize}:${price.colour}:${price.duplex}`,
+      String(price.pricePerSide),
+    ])));
+  }, [printPrices]);
   const addService = async (event: FormEvent) => {
     event.preventDefault(); setBusy('new'); setActionError(''); setMessage('');
     try {
-      await api('/shop/me/services', { method: 'POST', json: { code: newCode, enabled: true, price: Number(newPrice) } });
+      await api('/shop/me/services', { method: 'POST', json: { code: newCode, enabled: true, price: 0 } });
       reload(); setMessage('Service added to your catalogue.');
     } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Service could not be added.'); }
     finally { setBusy(''); }
@@ -527,7 +557,7 @@ function ServicesPage() {
     if (!Number.isFinite(Number(draft.price)) || Number(draft.price) < 0) { setActionError('Enter a valid non-negative service price.'); return; }
     setBusy(service.code); setActionError(''); setMessage('');
     try {
-      await api('/shop/me/services', { method: 'POST', json: { ...draft, price: Number(draft.price) } });
+      await api('/shop/me/services', { method: 'POST', json: { code: draft.code, name: draft.name, description: draft.description, enabled: draft.enabled, price: Number(draft.price) } });
       reload(); setDrafts((value) => { const next = { ...value }; delete next[service.code]; return next; }); setMessage('Service settings saved.');
     } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Service settings could not be saved.'); }
     finally { setBusy(''); }
@@ -538,11 +568,46 @@ function ServicesPage() {
     catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Service could not be removed.'); }
     finally { setBusy(''); }
   };
+  const addCustomService = async (event: FormEvent) => {
+    event.preventDefault(); setBusy('custom'); setActionError(''); setMessage('');
+    try {
+      await api('/shop/me/services/custom', { method: 'POST', json: { name: customName.trim(), description: customDescription.trim(), price: Number(customPrice) } });
+      setCustomName(''); setCustomDescription(''); setCustomPrice('');
+      reload(); setMessage('Custom service submitted for admin review.');
+    } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Custom service could not be added.'); }
+    finally { setBusy(''); }
+  };
+  const savePrintPrices = async (event: FormEvent) => {
+    event.preventDefault(); setBusy('pricing'); setActionError(''); setMessage('');
+    const prices = printPriceOptions.flatMap((option) => {
+      const raw = priceDrafts[option.key]?.trim();
+      return raw ? [{
+        paperSize: option.paperSize,
+        colour: option.colour,
+        duplex: option.duplex,
+        pricePerSide: Number(raw),
+      }] : [];
+    });
+    if (!prices.length || prices.some((price) => !Number.isFinite(price.pricePerSide) || price.pricePerSide < 0)) {
+      setActionError('Enter at least one valid non-negative print rate.');
+      setBusy('');
+      return;
+    }
+    try {
+      await api('/shop/me/pricing', { method: 'POST', json: { prices } });
+      reloadPricing(); setMessage('Print rates saved.');
+    } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Print rates could not be saved.'); }
+    finally { setBusy(''); }
+  };
   const editableServices = services.map((service) => drafts[service.code] ?? service);
   const availableToAdd = serviceOptions.filter(([code]) => !savedCodes.has(code));
   return <section className="content"><PageHeader title="Services & pricing" description="Control which print services customers can order and set your shop's prices." />{error && <LoadError message={error} retry={reload} />}{actionError && <LoadError message={actionError} />}{message && <p className="success-message" role="status">{message}</p>}
-    {loading ? <div className="panel"><LoadingRows /></div> : <div className="panel service-panel"><div className="panel-heading"><div><h2>Your services</h2><p>Prices are stored on your shop profile.</p></div><span className="count-pill">{services.length} active in catalogue</span></div>{editableServices.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Service</th><th>Availability</th><th>Price (LKR)</th><th /></tr></thead><tbody>{editableServices.map((service) => <tr key={service.code}><td><strong>{serviceOptions.find(([code]) => code === service.code)?.[1] ?? service.code.replaceAll('_', ' ')}</strong><small className="sub-cell">{service.code}</small></td><td><label className="toggle-control"><input type="checkbox" checked={service.enabled} onChange={(event) => setDrafts((value) => ({ ...value, [service.code]: { ...service, enabled: event.target.checked } }))} /><span /><b>{service.enabled ? 'Available' : 'Unavailable'}</b></label></td><td><label className="price-input"><span>LKR</span><input type="number" min="0" step="0.01" value={service.price} onChange={(event) => setDrafts((value) => ({ ...value, [service.code]: { ...service, price: event.target.value } }))} aria-label={`${service.code} price`} /></label></td><td className="row-actions"><button className="button button--secondary button--small" type="button" disabled={busy === service.code} onClick={() => void saveService(service)}>{busy === service.code ? 'Saving…' : 'Save'}</button><button className="icon-button danger-icon" type="button" disabled={busy === service.code} aria-label={`Remove ${service.code}`} onClick={() => void removeService(service.code)}><Icon name="trash" size={16} /></button></td></tr>)}</tbody></table></div> : <EmptyState title="No services configured" body="Add the print services your shop can fulfill." />}
-      <form className="inline-create" onSubmit={(event) => void addService(event)}><div><strong>Add a service</strong><small>Choose from the platform's supported catalogue.</small></div><select aria-label="Service to add" value={newCode} onChange={(event) => setNewCode(event.target.value)} disabled={!availableToAdd.length}>{availableToAdd.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><label className="price-input"><span>LKR</span><input required min="0" step="0.01" type="number" value={newPrice} onChange={(event) => setNewPrice(event.target.value)} aria-label="New service price" /></label><button className="button button--primary" disabled={busy === 'new' || !availableToAdd.length} type="submit"><Icon name="plus" size={16} />{busy === 'new' ? 'Adding…' : 'Add service'}</button></form>
+    {loading ? <div className="panel"><LoadingRows /></div> : <div className="panel service-panel"><div className="panel-heading"><div><h2>Your services</h2><p>Choose your print capabilities and offer priced add-ons.</p></div><span className="count-pill">{services.length} configured</span></div>{editableServices.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Service</th><th>Review</th><th>Availability</th><th>Price</th><th /></tr></thead><tbody>{editableServices.map((service) => <tr key={service.code}><td><strong>{service.name || serviceOptions.find(([code]) => code === service.code)?.[1] || service.code.replaceAll('_', ' ')}</strong><small className="sub-cell">{service.code}</small></td><td>{service.isCustom ? service.reviewStatus : 'Platform service'}</td><td><label className="toggle-control"><input type="checkbox" checked={service.enabled} onChange={(event) => setDrafts((value) => ({ ...value, [service.code]: { ...service, enabled: event.target.checked } }))} /><span /><b>{service.enabled ? 'Available' : 'Unavailable'}</b></label></td><td>{service.isCustom ? <label className="price-input"><span>LKR</span><input type="number" min="0" step="0.01" value={service.price} onChange={(event) => setDrafts((value) => ({ ...value, [service.code]: { ...service, price: event.target.value } }))} aria-label={`${service.name} order fee`} /></label> : 'Set print rates below'}</td><td className="row-actions"><button className="button button--secondary button--small" type="button" disabled={busy === service.code} onClick={() => void saveService(service)}>{busy === service.code ? 'Saving…' : 'Save'}</button><button className="icon-button danger-icon" type="button" disabled={busy === service.code} aria-label={`Remove ${service.name || service.code}`} onClick={() => void removeService(service.code)}><Icon name="trash" size={16} /></button></td></tr>)}</tbody></table></div> : <EmptyState title="No services configured" body="Add the print services your shop can fulfill." />}
+      <form className="inline-create" onSubmit={(event) => void addService(event)}><div><strong>Add a platform capability</strong><small>Choose a print format or finishing option.</small></div><select aria-label="Service to add" value={newCode} onChange={(event) => setNewCode(event.target.value)} disabled={!availableToAdd.length}>{availableToAdd.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><button className="button button--primary" disabled={busy === 'new' || !availableToAdd.length} type="submit"><Icon name="plus" size={16} />{busy === 'new' ? 'Adding…' : 'Add capability'}</button></form>
+      <form className="shop-custom-service-form" onSubmit={(event) => void addCustomService(event)}><div><h3>Offer a custom service</h3><p>Customers can add this to a print order after admin approval.</p></div><label>Service name<input minLength={3} maxLength={120} required value={customName} onChange={(event) => setCustomName(event.target.value)} /></label><label>Description<input maxLength={1000} value={customDescription} onChange={(event) => setCustomDescription(event.target.value)} /></label><label>Order fee (LKR)<input type="number" min="0" step="0.01" required value={customPrice} onChange={(event) => setCustomPrice(event.target.value)} /></label><button className="button button--primary" type="submit" disabled={busy === 'custom' || !customName.trim()}>{busy === 'custom' ? 'Submitting…' : 'Submit for review'}</button></form>
+      <div className="panel-heading"><div><h2>Print rates</h2><p>Set the per-side price for each print combination. Unset rates use the platform default.</p></div></div>
+      {pricingError && <LoadError message={pricingError} retry={reloadPricing} />}
+      {pricingLoading ? <LoadingRows /> : <form className="shop-pricing-editor" onSubmit={(event) => void savePrintPrices(event)}>{printPriceOptions.map((option) => <label key={option.key}>{option.label}<span className="price-input"><span>LKR</span><input type="number" min="0" step="0.01" value={priceDrafts[option.key] ?? ''} onChange={(event) => setPriceDrafts((value) => ({ ...value, [option.key]: event.target.value }))} aria-label={`${option.label} price per side`} /></span></label>)}<button className="button button--primary" type="submit" disabled={busy === 'pricing'}>{busy === 'pricing' ? 'Saving rates…' : 'Save print rates'}</button></form>}
     </div>}</section>;
 }
 

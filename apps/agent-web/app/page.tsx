@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
+  AgentCatalogService,
   AgentEarnings,
   AgentNotification,
   AgentProfile,
@@ -102,6 +103,7 @@ export default function AgentPortal() {
   const [notice, setNotice] = useState('');
   const [jobs, setJobs] = useState<AttestationJob[]>([]);
   const [services, setServices] = useState<AgentService[]>([]);
+  const [serviceCatalog, setServiceCatalog] = useState<AgentCatalogService[]>([]);
   const [earnings, setEarnings] = useState<AgentEarnings>({ total: 0, paid: 0, pending: 0, settlements: [] });
   const [notifications, setNotifications] = useState<AgentNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -150,13 +152,15 @@ export default function AgentPortal() {
     void Promise.all([
       apiRequest<AttestationJob[]>('/agents/me/jobs'),
       apiRequest<AgentService[]>('/agents/me/services'),
+      apiRequest<AgentCatalogService[]>('/attestation/services'),
       apiRequest<AgentEarnings>('/agents/me/earnings'),
       apiRequest<AgentNotification[]>('/agents/me/notifications'),
     ])
-      .then(([nextJobs, nextServices, nextEarnings, nextNotifications]) => {
+      .then(([nextJobs, nextServices, nextCatalog, nextEarnings, nextNotifications]) => {
         if (!active) return;
         setJobs(nextJobs);
         setServices(nextServices);
+        setServiceCatalog(nextCatalog);
         setEarnings(nextEarnings);
         setNotifications(nextNotifications);
       })
@@ -331,7 +335,7 @@ export default function AgentPortal() {
           {view === 'jobs' && <JobsPage jobs={jobs} services={services} loading={dataLoading} onUpdated={() => setReloadKey((key) => key + 1)} />}
           {view === 'processing' && <JobsPage jobs={jobs} services={services} loading={dataLoading} processing onUpdated={() => setReloadKey((key) => key + 1)} />}
           {view === 'completed' && <JobsPage jobs={jobs} services={services} loading={dataLoading} completed onUpdated={() => setReloadKey((key) => key + 1)} />}
-          {view === 'services' && <ServicesPage services={services} loading={dataLoading} onSaved={() => setReloadKey((key) => key + 1)} />}
+          {view === 'services' && <ServicesPage services={services} catalog={serviceCatalog} loading={dataLoading} onSaved={() => setReloadKey((key) => key + 1)} />}
           {view === 'earnings' && <EarningsPage earnings={earnings} loading={dataLoading} />}
           {view === 'profile' && <ProfilePage profile={profile} busy={busy} onSave={async (values) => {
             setBusy(true);
@@ -530,15 +534,45 @@ function TimelineEvent({ event }: { event: CustodyEvent }) {
   return <div className="timeline-event"><span className="timeline-dot" /><div><strong>{statusLabels[event.eventType] ?? event.eventType.replaceAll('_', ' ')}</strong><time>{formatDate(event.createdAt)}</time>{event.note && <p>{event.note}</p>}</div></div>;
 }
 
-function ServicesPage({ services, loading, onSaved }: { services: AgentService[]; loading: boolean; onSaved: () => void }) {
+function ServicesPage({ services, catalog, loading, onSaved }: {
+  services: AgentService[];
+  catalog: AgentCatalogService[];
+  loading: boolean;
+  onSaved: () => void;
+}) {
   const [edited, setEdited] = useState<AgentService[]>([]);
   const [code, setCode] = useState('');
-  const [name, setName] = useState('');
   const [price, setPrice] = useState('');
-  const [days, setDays] = useState('5');
+  const [days, setDays] = useState('');
+  const [customName, setCustomName] = useState('');
+  const [customPrice, setCustomPrice] = useState('');
+  const [customDays, setCustomDays] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => setEdited(services.map((service) => ({ ...service }))), [services]);
+  const availableToAdd = useMemo(
+    () => catalog.filter((service) => !edited.some((current) => current.code.toLowerCase() === service.id.toLowerCase())),
+    [catalog, edited],
+  );
+
+  useEffect(() => {
+    const catalogByCode = new Map(catalog.map((service) => [service.id.toLowerCase(), service]));
+    setEdited(services.map((service) => {
+      const catalogService = catalogByCode.get(service.code.toLowerCase());
+      return {
+        ...service,
+        code: catalogService?.id ?? service.code,
+        name: catalogService?.name ?? service.name,
+      };
+    }));
+  }, [services, catalog]);
+
+  useEffect(() => {
+    if (availableToAdd.some((service) => service.id === code)) return;
+    const nextService = availableToAdd[0];
+    setCode(nextService?.id ?? '');
+    setPrice(nextService ? String(nextService.serviceFee) : '');
+    setDays(nextService ? String(nextService.estimatedDays) : '');
+  }, [availableToAdd, code]);
 
   function updateService(id: string, changes: Partial<AgentService>) {
     setEdited((current) => current.map((service) => service.id === id ? { ...service, ...changes } : service));
@@ -554,9 +588,11 @@ function ServicesPage({ services, loading, onSaved }: { services: AgentService[]
         body: { services: edited.map((service) => ({
           code: service.code,
           name: service.name.trim(),
+          description: service.description,
           price: Number(service.price),
           estimatedDays: Number(service.estimatedDays),
           enabled: service.enabled,
+          isCustom: service.isCustom,
         })) },
       });
       onSaved();
@@ -569,20 +605,57 @@ function ServicesPage({ services, loading, onSaved }: { services: AgentService[]
 
   async function addService(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const selectedService = catalog.find((service) => service.id === code);
+    if (!selectedService) {
+      setError('Choose a service from the platform catalogue.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       await apiRequest('/agents/me/services', {
         method: 'POST',
-        body: { code: code.trim().toUpperCase(), name: name.trim(), price: Number(price), estimatedDays: Number(days), enabled: true },
+        body: { code: selectedService.id, name: selectedService.name, price: Number(price), estimatedDays: Number(days), enabled: true },
       });
       setCode('');
-      setName('');
       setPrice('');
-      setDays('5');
+      setDays('');
       onSaved();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Unable to add this service.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addCustomService(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const slug = customName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32);
+    if (slug.length < 2) {
+      setError('Use a service name with at least two letters or numbers.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await apiRequest('/agents/me/services', {
+        method: 'POST',
+        body: {
+          code: `custom-${slug}`,
+          name: customName.trim(),
+          description: '',
+          price: Number(customPrice),
+          estimatedDays: Number(customDays),
+          enabled: true,
+          isCustom: true,
+        },
+      });
+      setCustomName('');
+      setCustomPrice('');
+      setCustomDays('');
+      onSaved();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to add this custom service.');
     } finally {
       setBusy(false);
     }
@@ -595,22 +668,41 @@ function ServicesPage({ services, loading, onSaved }: { services: AgentService[]
       <form className="service-editor" onSubmit={saveServices}>
         <div className="table-heading"><span>Service</span><span>Price</span><span>Turnaround</span><span>Availability</span></div>
         {loading ? <p className="table-empty">Loading services…</p> : edited.length ? edited.map((service) => <div className="service-row" key={service.id}>
-          <div className="service-name"><strong>{service.name}</strong><small>{service.code}</small></div>
+          <div className="service-name"><strong>{service.name}</strong><small>{service.isCustom ? `Custom · ${service.reviewStatus.toLowerCase()} review` : service.code}</small></div>
           <label className="field-with-prefix"><span>LKR</span><input type="number" min="0" step="0.01" value={service.price} onChange={(event) => updateService(service.id, { price: event.target.value })} aria-label={`${service.name} price`} required /></label>
           <label className="field-with-suffix"><input type="number" min="1" step="1" value={service.estimatedDays} onChange={(event) => updateService(service.id, { estimatedDays: Number(event.target.value) })} aria-label={`${service.name} turnaround`} required /><span>days</span></label>
           <label className="service-availability"><input type="checkbox" checked={service.enabled} onChange={(event) => updateService(service.id, { enabled: event.target.checked })} /><span>{service.enabled ? 'Available' : 'Paused'}</span></label>
-        </div>) : <p className="table-empty">No services in your catalogue. Add a service to get started.</p>}
-        <div className="service-editor-footer"><p>Prices and estimated times are managed by your agency.</p><button className="primary-action" type="submit" disabled={busy || edited.length === 0}>{busy ? 'Saving…' : 'Save changes'}</button></div>
+        </div>) : <p className="table-empty">No services configured. Add a platform or custom service below.</p>}
+        <div className="service-editor-footer"><p>Custom services appear to customers after admin approval.</p><button className="primary-action" type="submit" disabled={busy || edited.length === 0}>{busy ? 'Saving…' : 'Save changes'}</button></div>
       </form>
       <form className="add-service-form" onSubmit={addService}>
-        <div><h2>Add a service</h2><p>Create a catalogue entry for your agency.</p></div>
+        <div><h2>Add a platform service</h2><p>Choose a platform service, then set your price and turnaround.</p></div>
         <div className="add-service-fields">
-          <label>Service name<input value={name} onChange={(event) => setName(event.target.value)} minLength={2} maxLength={120} required placeholder="e.g. Education document attestation" /></label>
-          <label>Service code<input value={code} onChange={(event) => setCode(event.target.value)} minLength={2} maxLength={40} required placeholder="EDUCATION_ATTESTATION" /></label>
+          <label>Platform service
+            <select required value={code} disabled={!availableToAdd.length} onChange={(event) => {
+              const nextCode = event.target.value;
+              const nextService = catalog.find((service) => service.id === nextCode);
+              setCode(nextCode);
+              setPrice(nextService ? String(nextService.serviceFee) : '');
+              setDays(nextService ? String(nextService.estimatedDays) : '');
+            }}>
+              {!availableToAdd.length && <option value="">All catalogue services added</option>}
+              {availableToAdd.map((service) => <option key={service.id} value={service.id}>{service.name} · default LKR {service.serviceFee.toFixed(2)}</option>)}
+            </select>
+          </label>
           <label>Price (LKR)<input type="number" min="0" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} required /></label>
           <label>Estimated days<input type="number" min="1" step="1" value={days} onChange={(event) => setDays(event.target.value)} required /></label>
         </div>
-        <button className="secondary-action" type="submit" disabled={busy}>Add service</button>
+        <button className="secondary-action" type="submit" disabled={busy || !availableToAdd.length}>{busy ? 'Adding…' : 'Add service'}</button>
+      </form>
+      <form className="add-service-form" onSubmit={(event) => void addCustomService(event)}>
+        <div><h2>Offer your own service</h2><p>Set the service name, your price and turnaround. Customers can book it after admin approval.</p></div>
+        <div className="add-service-fields">
+          <label>Service name<input minLength={3} maxLength={120} required value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="e.g. Embassy document processing" /></label>
+          <label>Price (LKR)<input type="number" min="0" max="100000" step="0.01" required value={customPrice} onChange={(event) => setCustomPrice(event.target.value)} /></label>
+          <label>Estimated days<input type="number" min="1" max="365" step="1" required value={customDays} onChange={(event) => setCustomDays(event.target.value)} /></label>
+        </div>
+        <button className="secondary-action" type="submit" disabled={busy || !customName.trim()}>{busy ? 'Adding…' : 'Submit custom service'}</button>
       </form>
     </section>
   );

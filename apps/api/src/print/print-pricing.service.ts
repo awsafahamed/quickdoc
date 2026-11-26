@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PrintQuoteBreakdown, PrintQuoteRequest } from './print.types';
@@ -31,6 +31,54 @@ export class PrintPricingService {
   constructor(private readonly prisma: PrismaService) {}
 
   async calculate(request: PrintQuoteRequest): Promise<PrintQuoteBreakdown> {
+    const shopServiceCodes = request.shopServiceCodes ?? [];
+    if (shopServiceCodes.length && !request.shopId) {
+      throw new BadRequestException('Select a shop before adding its custom services');
+    }
+
+    let shopServices: { code: string; name: string; price: number }[] = [];
+    let shopPricePerSide: number | undefined;
+    if (request.shopId) {
+      const shop = await this.prisma.shop.findFirst({
+        where: { id: request.shopId, status: 'APPROVED', isOpen: true },
+        select: { id: true },
+      });
+      if (!shop) throw new BadRequestException('Shop is not eligible');
+
+      const shopPrice = await this.prisma.shopPrice.findFirst({
+        where: {
+          shopId: request.shopId,
+          paperSize: request.paperSize,
+          colour: request.colour === 'COLOUR',
+          duplex: request.sides === 'DUPLEX',
+        },
+        select: { pricePerSide: true },
+      });
+      if (shopPrice) shopPricePerSide = Number(shopPrice.pricePerSide);
+
+      if (shopServiceCodes.length) {
+        const offers = await this.prisma.shopService.findMany({
+          where: {
+            shopId: request.shopId,
+            code: { in: shopServiceCodes },
+            isCustom: true,
+            enabled: true,
+            reviewStatus: 'APPROVED',
+          },
+          select: { code: true, name: true, price: true },
+          orderBy: { name: 'asc' },
+        });
+        if (offers.length !== shopServiceCodes.length) {
+          throw new BadRequestException('One or more selected shop services are unavailable');
+        }
+        shopServices = offers.map((offer) => ({
+          code: offer.code,
+          name: offer.name,
+          price: Number(offer.price),
+        }));
+      }
+    }
+
     const storedRules = await this.prisma.platformPricingRule.findMany();
     const pricing: Record<string, number> = { ...DEFAULT_PRICING };
     for (const rule of storedRules) {
@@ -39,9 +87,11 @@ export class PrintPricingService {
 
     const printedPages = request.pageCount * request.copies;
     const sheets = request.sides === 'DUPLEX' ? Math.ceil(printedPages / 2) : printedPages;
-    const printing = printedPages
-      * pricing[request.colour === 'COLOUR' ? 'COLOUR_RATE' : 'BLACK_WHITE_RATE']
-      * pricing[`PAPER_${request.paperSize}_MULTIPLIER`];
+    const printing = shopPricePerSide !== undefined
+      ? printedPages * shopPricePerSide
+      : printedPages
+        * pricing[request.colour === 'COLOUR' ? 'COLOUR_RATE' : 'BLACK_WHITE_RATE']
+        * pricing[`PAPER_${request.paperSize}_MULTIPLIER`];
     const finishing = (request.binding ? pricing.BINDING_FEE : 0)
       + (request.stapling ? pricing.STAPLING_FEE : 0)
       + (request.lamination ? pricing.LAMINATION_PER_PAGE * printedPages : 0);
@@ -50,16 +100,19 @@ export class PrintPricingService {
       ? pricing.EXPRESS_BASE + request.deliveryDistanceKm * pricing.EXPRESS_PER_KM
       : 0;
     const shopService = pricing.SHOP_SERVICE_FEE;
+    const shopServiceTotal = shopServices.reduce((total, service) => total + service.price, 0);
     const discount = printedPages >= pricing.VOLUME_DISCOUNT_MIN_PAGES
       ? money((printing + finishing) * pricing.VOLUME_DISCOUNT_RATE)
       : 0;
-    const subtotal = printing + finishing + shopService + delivery + express - discount;
+    const subtotal = printing + finishing + shopService + shopServiceTotal + delivery + express - discount;
     const tax = money(subtotal * pricing.TAX_RATE);
 
     return {
       printing: money(printing),
       finishing: money(finishing),
       shopService: money(shopService),
+      shopServiceTotal: money(shopServiceTotal),
+      shopServices,
       delivery: money(delivery),
       express: money(express),
       discount: money(discount),

@@ -8,6 +8,7 @@ coverage/
 apps/*/.env
 apps/*/.env.*
 !apps/*/.env.example
+apps/api/.private-documents/
 prisma/*.db
 *.log
 *.tsbuildinfo

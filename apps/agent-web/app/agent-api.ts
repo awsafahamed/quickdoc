@@ -38,9 +38,19 @@ export interface AgentService {
   id: string;
   code: string;
   name: string;
+  description: string;
   price: number | string;
   estimatedDays: number;
   enabled: boolean;
+  isCustom: boolean;
+  reviewStatus: 'PENDING' | 'APPROVED' | 'REJECTED';
+}
+
+export interface AgentCatalogService {
+  id: string;
+  name: string;
+  serviceFee: number;
+  estimatedDays: number;
 }
 
 export interface AgentSettlement {

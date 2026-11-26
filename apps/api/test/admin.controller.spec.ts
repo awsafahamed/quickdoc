@@ -18,6 +18,41 @@ describe('AdminController rider approval', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  describe('AdminController provider service moderation', () => {
+    it('approves only custom provider offers and audits the decision transactionally', async () => {
+      const transaction = {
+        shopService: {
+          findUnique: jest.fn().mockResolvedValue({ id: 'offer-id', isCustom: true }),
+          update: jest.fn().mockResolvedValue({ id: 'offer-id', reviewStatus: 'APPROVED' }),
+        },
+        auditLog: { create: jest.fn() },
+      };
+      const prisma = {
+        $transaction: jest.fn((callback: (tx: typeof transaction) => Promise<unknown>) => callback(transaction)),
+      } as unknown as PrismaService;
+      const controller = new AdminController(prisma);
+
+      await controller.reviewProviderService(
+        'shops',
+        'offer-id',
+        { status: 'APPROVED' },
+        { user: { id: 'admin-id', roles: ['ADMIN'] } },
+      );
+
+      expect(transaction.shopService.update).toHaveBeenCalledWith({
+        where: { id: 'offer-id' },
+        data: { reviewStatus: 'APPROVED' },
+      });
+      expect(transaction.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          actorId: 'admin-id',
+          action: 'PROVIDER_SERVICE_APPROVED',
+          entityId: 'offer-id',
+        }),
+      });
+    });
+  });
+
   describe('AdminController platform pricing', () => {
     it('rejects catalogue reads from non-admin users before querying data', async () => {
       const prisma = {

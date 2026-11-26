@@ -308,8 +308,9 @@ async function seedPartnerProfiles() {
   ids.agentProfile = agentProfile.id;
 
   for (const [code, name, price, estimatedDays] of [
-    ['DEGREE', 'Degree certificate attestation', 4500, 7],
-    ['BIRTH', 'Certified birth certificate copy', 2500, 5],
+    ['degree-attestation', 'Degree certificate attestation', 4500, 7],
+    ['birth-certificate-copy', 'Certified birth certificate copy', 2500, 5],
+    ['document-legalization', 'Document legalization', 6000, 10],
   ]) {
     await prisma.agentService.upsert({
       where: { agentId_code: { agentId: ids.agentProfile, code } },

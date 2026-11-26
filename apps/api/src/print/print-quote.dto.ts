@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsEnum, IsInt, IsNumber, Max, Min } from 'class-validator';
+import { ArrayMaxSize, ArrayUnique, IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 import { DeliverySpeed, PrintColour, PrintPaperSize, PrintSides } from './print.types';
 
 export class PrintQuoteDto {
@@ -41,4 +41,15 @@ export class PrintQuoteDto {
   @Min(0)
   @Max(200)
   deliveryDistanceKm!: number;
+
+  @IsOptional()
+  @IsUUID()
+  shopId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @ArrayUnique()
+  @IsString({ each: true })
+  shopServiceCodes?: string[];
 }

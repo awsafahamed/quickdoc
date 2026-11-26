@@ -11,4 +11,6 @@ export interface PrintShop {
   capabilities: string[];
   supportedPaperSizes: string[];
   colourPrinting: boolean;
+  services: { code: string; name: string; description: string; price: number }[];
+  printPrices: { paperSize: string; colour: boolean; duplex: boolean; pricePerSide: number }[];
 }

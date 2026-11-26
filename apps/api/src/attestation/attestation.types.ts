@@ -7,10 +7,13 @@ export interface AttestationService {
   requiresOriginals: boolean;
   requiredOriginals: string[];
   supportingDocuments: string[];
+  providerAgentId?: string;
+  providerName?: string;
 }
 
 export interface AttestationQuoteRequest {
   serviceId: string;
+  agentId: string;
   pickupDistanceKm: number;
   returnDistanceKm: number;
   express: boolean;

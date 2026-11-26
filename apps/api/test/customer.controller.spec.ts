@@ -55,7 +55,10 @@ describe('CustomerController print orders', () => {
       finishing: 4,
       delivery: 10,
       express: 14,
-      total: 43,
+      shopService: 2,
+      shopServiceTotal: 8,
+      shopServices: [{ code: 'premium-binding', name: 'Premium binding', price: 8 }],
+      total: 52.5,
     };
     const pricing = { calculate: jest.fn().mockResolvedValue(quote) } as unknown as PrintPricingService;
     const storage = {} as PrivateObjectStorageService;
@@ -76,6 +79,7 @@ describe('CustomerController print orders', () => {
         lamination: true,
         deliverySpeed: DeliverySpeed.EXPRESS,
         deliveryDistanceKm: 5,
+        shopServiceCodes: ['premium-binding'],
         deliveryAddress: '123 Test Street',
         clientKey: 'client-key',
       },
@@ -92,13 +96,16 @@ describe('CustomerController print orders', () => {
       lamination: true,
       deliverySpeed: DeliverySpeed.EXPRESS,
       deliveryDistanceKm: 5,
+      shopId: 'shop-id',
+      shopServiceCodes: ['premium-binding'],
     });
     expect(transaction.order.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
-        printSubtotal: 16,
+        printSubtotal: 24,
         deliveryFee: 24,
-        platformFee: 3,
-        total: 43,
+        platformFee: 4.5,
+        total: 52.5,
+        shopServiceSnapshot: [{ code: 'premium-binding', name: 'Premium binding', price: 8 }],
       }),
     }));
     expect(transaction.orderItem.create).toHaveBeenCalledWith(expect.objectContaining({

@@ -1,9 +1,12 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsNumber, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsNumber, IsString, IsUUID, Max, Min } from 'class-validator';
 
 export class AttestationQuoteDto {
   @IsString()
   serviceId!: string;
+
+  @IsUUID()
+  agentId!: string;
 
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })

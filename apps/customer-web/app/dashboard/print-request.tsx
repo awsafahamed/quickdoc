@@ -22,6 +22,8 @@ type Quote = {
   currency: string;
   sheets: number;
   expiresAt: string;
+  shopServiceTotal?: number;
+  shopServices?: { code: string; name: string; price: number }[];
 };
 
 type Shop = {
@@ -32,6 +34,8 @@ type Shop = {
   rating: number;
   reviewCount: number;
   estimatedMinutes: number;
+  services: { code: string; name: string; description: string; price: number }[];
+  printPrices: { paperSize: string; colour: boolean; duplex: boolean; pricePerSide: number }[];
 };
 
 export type SavedDocument = {
@@ -146,6 +150,7 @@ export default function PrintRequestFlow({
   const [shops, setShops] = useState<Shop[]>([]);
   const [shopsLoading, setShopsLoading] = useState(false);
   const [selectedShopId, setSelectedShopId] = useState('');
+  const [selectedShopServiceCodes, setSelectedShopServiceCodes] = useState<string[]>([]);
   const [addressMode, setAddressMode] = useState<'saved' | 'custom'>(addresses.length ? 'saved' : 'custom');
   const [selectedAddressId, setSelectedAddressId] = useState(addresses[0]?.id ?? '');
   const [customAddress, setCustomAddress] = useState('');
@@ -182,6 +187,61 @@ export default function PrintRequestFlow({
       });
     return () => controller.abort();
   }, [step, config.paperSize, config.colour]);
+
+  useEffect(() => {
+    if (step !== 2 || !selectedShopId) return;
+    const controller = new AbortController();
+    setQuote(null);
+    setQuoteState('loading');
+    setError('');
+    fetch(`${apiBase()}/print/quote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        pageCount: config.pages,
+        copies: config.copies,
+        paperSize: config.paperSize,
+        colour: config.colour,
+        sides: config.sides,
+        binding: config.binding,
+        stapling: config.stapling,
+        lamination: config.lamination,
+        deliverySpeed: config.deliverySpeed,
+        deliveryDistanceKm: config.distance,
+        shopId: selectedShopId,
+        shopServiceCodes: selectedShopServiceCodes,
+      }),
+    })
+      .then(async (response) => {
+        if (!response.ok) throw await getApiError(response, 'The selected shop quote could not be calculated');
+        return response.json() as Promise<{ data: Quote }>;
+      })
+      .then((result) => setQuote(result.data))
+      .catch((cause: unknown) => {
+        if (cause instanceof DOMException && cause.name === 'AbortError') return;
+        setError(cause instanceof Error ? cause.message : 'The selected shop quote could not be calculated.');
+        setQuoteState('error');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setQuoteState('idle');
+      });
+    return () => controller.abort();
+  }, [
+    step,
+    selectedShopId,
+    selectedShopServiceCodes,
+    config.pages,
+    config.copies,
+    config.paperSize,
+    config.colour,
+    config.sides,
+    config.binding,
+    config.stapling,
+    config.lamination,
+    config.deliverySpeed,
+    config.distance,
+  ]);
 
   const configIsValid = Number.isInteger(config.pages) && config.pages >= 1 && config.pages <= 10000
     && Number.isInteger(config.copies) && config.copies >= 1 && config.copies <= 100;
@@ -337,6 +397,7 @@ export default function PrintRequestFlow({
           lamination: config.lamination,
           deliverySpeed: config.deliverySpeed,
           deliveryDistanceKm: config.distance,
+          shopServiceCodes: selectedShopServiceCodes,
           deliveryAddress,
           instructions: instructions.trim() || undefined,
           clientKey: key,
@@ -363,23 +424,50 @@ export default function PrintRequestFlow({
         <div className="shop-layout">
           <div>
             <div className="shop-toolbar"><strong>{shopsLoading ? 'Finding eligible shops…' : `${shops.length} eligible shops`}</strong><span>Distance and turnaround are estimates</span></div>
-            {shops.map((shop) => (
-              <button className={`shop-card ${selectedShopId === shop.id ? 'shop-card--selected' : ''}`} key={shop.id} type="button" aria-pressed={selectedShopId === shop.id} onClick={() => setSelectedShopId(shop.id)}>
+            {shops.map((shop) => {
+              const printPrice = shop.printPrices.find((price) =>
+                price.paperSize === config.paperSize
+                && price.colour === (config.colour === 'COLOUR')
+                && price.duplex === (config.sides === 'DUPLEX'));
+              return <button className={`shop-card ${selectedShopId === shop.id ? 'shop-card--selected' : ''}`} key={shop.id} type="button" aria-pressed={selectedShopId === shop.id} onClick={() => {
+                if (selectedShopId !== shop.id) {
+                  setSelectedShopId(shop.id);
+                  setSelectedShopServiceCodes([]);
+                  setQuote(null);
+                }
+              }}>
                 <span className="shop-card__mark"><Icon name="print" /></span>
-                <span className="shop-card__body"><strong>{shop.name}</strong><span>{shop.address} · {shop.distanceKm.toFixed(1)} km</span><span className="shop-card__meta">Rating {shop.rating} ({shop.reviewCount} reviews) · About {shop.estimatedMinutes} min</span></span>
+                <span className="shop-card__body"><strong>{shop.name}</strong><span>{shop.address} · {shop.distanceKm.toFixed(1)} km</span><span className="shop-card__meta">Rating {shop.rating} ({shop.reviewCount} reviews) · About {shop.estimatedMinutes} min</span>{printPrice && <span className="shop-card__meta">LKR {printPrice.pricePerSide.toFixed(2)} per printed side</span>}{shop.services.length > 0 && <span className="shop-card__meta">{shop.services.length} customer-selected add-on{shop.services.length === 1 ? '' : 's'}</span>}</span>
                 <span className="shop-card__check">{selectedShopId === shop.id ? 'Selected' : 'Choose'}</span>
-              </button>
-            ))}
+              </button>;
+            })}
+            {shops.find((shop) => shop.id === selectedShopId)?.services.length ? <div className="shop-service-selection">
+              <h3>Optional shop services</h3>
+              <p>These one-time fees are added to your order and shown in the updated quote.</p>
+              {shops.find((shop) => shop.id === selectedShopId)!.services.map((service) => (
+                <label key={service.code}>
+                  <input type="checkbox" checked={selectedShopServiceCodes.includes(service.code)} disabled={quoteState === 'loading'} onChange={(event) => {
+                    setSelectedShopServiceCodes((current) => event.target.checked
+                      ? [...current, service.code]
+                      : current.filter((code) => code !== service.code));
+                    setQuote(null);
+                  }} />
+                  <span><strong>{service.name}</strong>{service.description && <small>{service.description}</small>}</span>
+                  <strong>LKR {service.price.toFixed(2)}</strong>
+                </label>
+              ))}
+            </div> : null}
             {!shopsLoading && !shops.length && !error && <div className="empty-panel"><span className="empty-panel__icon"><Icon name="print" /></span><h3>No eligible shops found</h3><p>Try a different print setup. Your document has not been sent to a shop.</p></div>}
             {error && <p className="flow-error" role="alert">{error}</p>}
           </div>
           <aside className="shop-summary panel">
-            <p className="section-label">Print summary</p><h2>{quote?.currency} {quote?.total.toFixed(2)}</h2>
+            <p className="section-label">Print summary</p><h2>{quoteState === 'loading' ? 'Updating quote…' : `${quote?.currency ?? 'LKR'} ${quote?.total.toFixed(2) ?? '—'}`}</h2>
             <span>{config.pages} pages · {config.copies} {config.copies === 1 ? 'copy' : 'copies'}</span>
             <div className="summary-rule" />
             <small>{config.paperSize} · {config.colour === 'COLOUR' ? 'Colour' : 'Black & white'} · {config.sides === 'DUPLEX' ? 'Double-sided' : 'Single-sided'}</small>
             {file && <div className="checkout-document"><Icon name="file" /><span><strong>{file.name}</strong><small>PDF stored privately</small></span></div>}
-            <button className="button button--primary" type="button" disabled={!selectedShopId} onClick={() => { setError(''); setStep(3); }}>Continue to delivery <Icon name="arrow" /></button>
+            {error && <p className="flow-error" role="alert">{error}</p>}
+            <button className="button button--primary" type="button" disabled={!selectedShopId || !quote || quoteState === 'loading'} onClick={() => { setError(''); setStep(3); }}>Continue to delivery <Icon name="arrow" /></button>
           </aside>
         </div>
       </section>
@@ -409,6 +497,7 @@ export default function PrintRequestFlow({
           <aside className="shop-summary panel">
             <p className="section-label">Order review</p><h2>{quote?.currency} {quote?.total.toFixed(2)}</h2>
             <span>{selectedShop?.name ?? 'Selected shop'}</span>
+            {quote?.shopServices?.map((service) => <span className="shop-summary__service" key={service.code}>{service.name} · LKR {service.price.toFixed(2)}</span>)}
             <div className="summary-rule" />
             <small>{config.pages} pages · {config.copies} copies · {config.paperSize} · {config.deliverySpeed === 'EXPRESS' ? 'Express delivery' : 'Standard delivery'}</small>
             {file && <div className="checkout-document"><Icon name="file" /><span><strong>{file.name}</strong><small>PDF · {Math.ceil(file.size / 1024)} KB</small></span></div>}

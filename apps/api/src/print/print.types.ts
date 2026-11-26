@@ -30,12 +30,22 @@ export interface PrintQuoteRequest {
   lamination: boolean;
   deliverySpeed: DeliverySpeed;
   deliveryDistanceKm: number;
+  shopId?: string;
+  shopServiceCodes?: string[];
+}
+
+export interface PrintShopServiceQuoteLine {
+  code: string;
+  name: string;
+  price: number;
 }
 
 export interface PrintQuoteBreakdown {
   printing: number;
   finishing: number;
   shopService: number;
+  shopServiceTotal: number;
+  shopServices: PrintShopServiceQuoteLine[];
   delivery: number;
   express: number;
   discount: number;

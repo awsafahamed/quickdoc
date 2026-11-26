@@ -64,4 +64,19 @@ describe('AttestationCatalogService', () => {
     expect(quote.tax).toBe(13.6);
     expect(quote.total).toBe(149.6);
   });
+
+  it('uses the selected agent service price when provided', async () => {
+    const prisma = {
+      platformCatalogService: {
+        findFirst: jest.fn().mockResolvedValue({ serviceFee: 100 }),
+      },
+      platformPricingRule: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const catalogue = new AttestationCatalogService(prisma as unknown as PrismaService);
+
+    const quote = await catalogue.quote('degree', 0, 0, false, 80);
+
+    expect(quote.serviceFee).toBe(80);
+    expect(quote.total).toBe(105);
+  });
 });

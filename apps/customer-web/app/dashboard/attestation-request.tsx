@@ -5,9 +5,12 @@ import { useEffect, useState } from 'react';
 type Service = {
   id: string;
   name: string;
+  description?: string;
   estimatedDays: number;
   serviceFee: number;
   requiredOriginals: string[];
+  providerAgentId?: string;
+  providerName?: string;
 };
 
 type Agent = {
@@ -15,6 +18,7 @@ type Agent = {
   businessName: string;
   address: string;
   estimatedDays: number;
+  serviceFee: number;
 };
 
 type Quote = {
@@ -87,7 +91,7 @@ export default function AttestationRequestFlow({
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${apiBase()}/attestation/services`, { signal: controller.signal })
+    fetch(`${apiBase()}/attestation/marketplace-services`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw await getApiError(response, 'Attestation services could not be loaded');
         return response.json() as Promise<{ data: Service[] }>;
@@ -146,7 +150,7 @@ export default function AttestationRequestFlow({
   const quoteIsCurrent = Boolean(quote && Number.isFinite(quoteExpiresAt) && quoteExpiresAt > Date.now());
 
   const requestQuote = async () => {
-    if (!selectedService || !distancesValid) return;
+    if (!selectedService || !selectedAgent || !distancesValid) return;
     setQuoteLoading(true);
     setQuote(null);
     setError('');
@@ -156,6 +160,7 @@ export default function AttestationRequestFlow({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           serviceId,
+          agentId,
           pickupDistanceKm: pickupDistance,
           returnDistanceKm: returnDistance,
           express,
@@ -263,13 +268,14 @@ export default function AttestationRequestFlow({
                 }}>
                   {servicesLoading && <option value="">Loading services…</option>}
                   {!servicesLoading && !services.length && <option value="">No services available</option>}
-                  {services.map((service) => <option key={service.id} value={service.id}>{service.name} · LKR {service.serviceFee.toFixed(2)}</option>)}
+                  {services.map((service) => <option key={service.id} value={service.id}>{service.name}{service.providerName ? ` — ${service.providerName}` : ''}</option>)}
                 </select>
               </label>
 
               {selectedService && <div className="requirements">
                 <strong>Originals to prepare</strong>
                 <span>{selectedService.requiredOriginals.length ? selectedService.requiredOriginals.join(' · ') : 'Check with your selected agent before pickup.'}</span>
+                {selectedService.description && <span>{selectedService.description}</span>}
                 <small>Keep original documents ready for the scheduled collection.</small>
               </div>}
 
@@ -281,10 +287,10 @@ export default function AttestationRequestFlow({
                     key={agent.id}
                     type="button"
                     aria-pressed={agentId === agent.id}
-                    onClick={() => { setAgentId(agent.id); setError(''); }}
+                    onClick={() => { setAgentId(agent.id); setQuote(null); setError(''); }}
                   >
                     <span><strong>{agent.businessName}</strong><small>{agent.address}</small></span>
-                    <span className="attest-agent__time">About {agent.estimatedDays} days</span>
+                    <span className="attest-agent__offer"><strong>LKR {Number(agent.serviceFee).toFixed(2)}</strong><small>Service fee · {agent.estimatedDays} days</small></span>
                   </button>
                 )) : <p className="form-copy">{serviceId ? 'No approved agents are currently available for this service.' : 'Choose a service to find available agents.'}</p>}
               </fieldset>
@@ -324,7 +330,7 @@ export default function AttestationRequestFlow({
                 Request express processing
               </label>
               <p className="attest-distance-note">Distance is an estimate used for the quote and can be confirmed with your agent.</p>
-              <button className="button button--secondary quote-button" type="button" disabled={!selectedService || !distancesValid || quoteLoading} onClick={requestQuote}>
+              <button className="button button--secondary quote-button" type="button" disabled={!selectedService || !selectedAgent || !distancesValid || quoteLoading} onClick={requestQuote}>
                 {quoteLoading ? 'Calculating quote…' : 'Get booking quote'}
               </button>
               {quote && <div className="quote-result">

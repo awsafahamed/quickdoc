@@ -57,6 +57,11 @@ class AgentServiceDto {
   @Length(2, 120)
   name!: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  description?: string;
+
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
@@ -69,6 +74,10 @@ class AgentServiceDto {
 
   @IsBoolean()
   enabled!: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isCustom?: boolean;
 }
 
 class CustodyDto {
@@ -271,23 +280,40 @@ export class AgentsController {
     @Body() dto: AgentServiceDto,
   ) {
     const profile = await this.profileFor(req);
-    const code = dto.code.trim().toUpperCase();
+    const code = dto.code.trim().toLowerCase();
+    const catalogService = await this.prisma.platformCatalogService.findFirst({
+      where: { code },
+      select: { code: true, name: true, description: true, enabled: true },
+    });
+    if (dto.isCustom && catalogService) {
+      throw new BadRequestException('Custom services must use a code outside the platform catalogue');
+    }
+    if (catalogService && !catalogService.enabled) {
+      throw new BadRequestException('This platform service is disabled');
+    }
+    const isCustom = dto.isCustom ?? !catalogService;
     return {
       data: await this.prisma.agentService.upsert({
         where: { agentId_code: { agentId: profile.id, code } },
         create: {
           agentId: profile.id,
           code,
-          name: dto.name.trim(),
+          name: catalogService?.name ?? dto.name.trim(),
+          description: catalogService?.description ?? dto.description?.trim() ?? '',
           price: dto.price,
           estimatedDays: dto.estimatedDays,
           enabled: dto.enabled,
+          isCustom,
+          reviewStatus: isCustom ? 'PENDING' : 'APPROVED',
         },
         update: {
-          name: dto.name.trim(),
+          name: catalogService?.name ?? dto.name.trim(),
+          description: catalogService?.description ?? dto.description?.trim() ?? '',
           price: dto.price,
           estimatedDays: dto.estimatedDays,
           enabled: dto.enabled,
+          isCustom,
+          ...(isCustom ? { reviewStatus: 'PENDING' as const } : {}),
         },
       }),
     };
@@ -299,29 +325,49 @@ export class AgentsController {
     @Body() dto: AgentServicesDto,
   ) {
     const profile = await this.profileFor(req);
-    const codes = dto.services.map((service) => service.code.trim().toUpperCase());
+    const codes = dto.services.map((service) => service.code.trim().toLowerCase());
     if (new Set(codes).size !== codes.length) {
       throw new BadRequestException('Each service must have a unique code');
     }
-    const operations = dto.services.map((service, index) =>
-      this.prisma.agentService.upsert({
-        where: { agentId_code: { agentId: profile.id, code: codes[index] } },
+    const catalogServices = await this.prisma.platformCatalogService.findMany({
+      where: { code: { in: codes } },
+      select: { code: true, name: true, description: true, enabled: true },
+    });
+    if (dto.services.some((service, index) => service.isCustom && catalogServices.some((catalog) => catalog.code === codes[index]))) {
+      throw new BadRequestException('Custom services must use codes outside the platform catalogue');
+    }
+    if (catalogServices.some((service) => !service.enabled)) {
+      throw new BadRequestException('A selected platform service is disabled');
+    }
+    const catalogByCode = new Map(catalogServices.map((service) => [service.code, service]));
+    const operations = dto.services.map((service, index) => {
+      const code = codes[index];
+      const catalogService = catalogByCode.get(code);
+      const isCustom = service.isCustom ?? !catalogService;
+      return this.prisma.agentService.upsert({
+        where: { agentId_code: { agentId: profile.id, code } },
         create: {
           agentId: profile.id,
-          code: codes[index],
-          name: service.name.trim(),
+          code,
+          name: catalogService?.name ?? service.name.trim(),
+          description: catalogService?.description ?? service.description?.trim() ?? '',
           price: service.price,
           estimatedDays: service.estimatedDays,
           enabled: service.enabled,
+          isCustom,
+          reviewStatus: isCustom ? 'PENDING' : 'APPROVED',
         },
         update: {
-          name: service.name.trim(),
+          name: catalogService?.name ?? service.name.trim(),
+          description: catalogService?.description ?? service.description?.trim() ?? '',
           price: service.price,
           estimatedDays: service.estimatedDays,
           enabled: service.enabled,
+          isCustom,
+          ...(isCustom ? { reviewStatus: 'PENDING' as const } : {}),
         },
-      }),
-    );
+      });
+    });
     return { data: await this.prisma.$transaction(operations) };
   }
 

@@ -18,8 +18,8 @@ type CatalogService = {
 
 type PricingRule = { key: string; amount: number; updatedAt: string };
 type PartnerServices = {
-  shopServices: { id: string; code: string; enabled: boolean; price: number | string; shop: { id: string; name: string; status: string } }[];
-  agentServices: { id: string; code: string; name: string; enabled: boolean; price: number | string; estimatedDays: number; agent: { id: string; businessName: string; status: string } }[];
+  shopServices: { id: string; code: string; name: string; description: string; isCustom: boolean; reviewStatus: string; enabled: boolean; price: number | string; shop: { id: string; name: string; status: string } }[];
+  agentServices: { id: string; code: string; name: string; description: string; isCustom: boolean; reviewStatus: string; enabled: boolean; price: number | string; estimatedDays: number; agent: { id: string; businessName: string; status: string } }[];
 };
 type CatalogData = { services: CatalogService[]; pricingRules: PricingRule[] };
 
@@ -73,6 +73,7 @@ export default function PlatformCatalogPage({ onSessionExpired }: { onSessionExp
   const [adding, setAdding] = useState(false);
   const [ruleValues, setRuleValues] = useState<Record<string, string>>({});
   const [savingRule, setSavingRule] = useState('');
+  const [reviewingOfferId, setReviewingOfferId] = useState('');
   const [savingService, setSavingService] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -173,6 +174,30 @@ export default function PlatformCatalogPage({ onSessionExpired }: { onSessionExp
     }
   };
 
+  const reviewProviderOffer = async (
+    providerType: 'shops' | 'agents',
+    id: string,
+    status: 'APPROVED' | 'REJECTED',
+  ) => {
+    setError('');
+    setNotice('');
+    setReviewingOfferId(id);
+    try {
+      await adminRequest(`/admin/services/${providerType}/${id}/review`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      setNotice(`Provider service ${status.toLowerCase()}.`);
+      setRefreshKey((key) => key + 1);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Provider service review could not be saved.');
+      if (reason instanceof AdminApiError && reason.status === 401) onSessionExpired();
+    } finally {
+      setReviewingOfferId('');
+    }
+  };
+
   const cancelAdd = () => {
     setAdding(false);
     setForm(catalog?.services.find((service) => service.code === selectedCode) ?? initialForm());
@@ -253,14 +278,14 @@ export default function PlatformCatalogPage({ onSessionExpired }: { onSessionExp
 
         {partners && <>
           <h2 className="subsection-title">Provider offerings</h2>
-          <p className="operational-note">These are partner-specific records. Global settings above do not overwrite a provider’s own offerings.</p>
-          <div className="data-table"><table><thead><tr><th>Service code</th><th>Print shop</th><th>Price</th><th>Availability</th></tr></thead><tbody>
-            {partners.shopServices.map((service) => <tr key={service.id}><td><strong>{service.code}</strong></td><td>{service.shop.name}<span className="table-secondary">Shop {service.shop.status.toLowerCase()}</span></td><td>{money(service.price)}</td><td>{service.enabled && service.shop.status === 'APPROVED' ? 'Enabled' : 'Disabled'}</td></tr>)}
-            {partners.shopServices.length === 0 && <tr><td colSpan={4}><div className="table-empty"><strong>No print shop offerings configured</strong></div></td></tr>}
+          <p className="operational-note">Custom services require review before customers can see or book them. Global settings above remain under admin control.</p>
+          <div className="data-table"><table><thead><tr><th>Print shop service</th><th>Provider</th><th>Order fee</th><th>Review status</th><th>Actions</th></tr></thead><tbody>
+            {partners.shopServices.map((service) => <tr key={service.id}><td><strong>{service.name || service.code}</strong><span className="table-secondary">{service.code}</span></td><td>{service.shop.name}<span className="table-secondary">Shop {service.shop.status.toLowerCase()}</span></td><td>{service.isCustom ? money(service.price) : 'Platform rate'}</td><td>{service.isCustom ? service.reviewStatus : 'Platform service'}</td><td>{service.isCustom && <><button className="table-action" type="button" disabled={reviewingOfferId === service.id || service.reviewStatus === 'APPROVED'} onClick={() => void reviewProviderOffer('shops', service.id, 'APPROVED')}>{reviewingOfferId === service.id ? 'Saving…' : 'Approve'}</button><button className="table-action" type="button" disabled={reviewingOfferId === service.id || service.reviewStatus === 'REJECTED'} onClick={() => void reviewProviderOffer('shops', service.id, 'REJECTED')}>Reject</button></>}</td></tr>)}
+            {partners.shopServices.length === 0 && <tr><td colSpan={5}><div className="table-empty"><strong>No print shop offerings configured</strong></div></td></tr>}
           </tbody></table></div>
-          <div className="data-table"><table><thead><tr><th>Service</th><th>Attestation agent</th><th>Price</th><th>Estimated days</th><th>Availability</th></tr></thead><tbody>
-            {partners.agentServices.map((service) => <tr key={service.id}><td><strong>{service.name}</strong><span className="table-secondary">{service.code}</span></td><td>{service.agent.businessName}</td><td>{money(service.price)}</td><td>{service.estimatedDays}</td><td>{service.enabled && service.agent.status === 'APPROVED' ? 'Enabled' : 'Disabled'}</td></tr>)}
-            {partners.agentServices.length === 0 && <tr><td colSpan={5}><div className="table-empty"><strong>No agent offerings configured</strong></div></td></tr>}
+          <div className="data-table"><table><thead><tr><th>Attestation service</th><th>Provider</th><th>Price</th><th>Turnaround</th><th>Review status</th><th>Actions</th></tr></thead><tbody>
+            {partners.agentServices.map((service) => <tr key={service.id}><td><strong>{service.name}</strong><span className="table-secondary">{service.code}</span></td><td>{service.agent.businessName}<span className="table-secondary">Agent {service.agent.status.toLowerCase()}</span></td><td>{money(service.price)}</td><td>{service.estimatedDays} days</td><td>{service.isCustom ? service.reviewStatus : 'Platform service'}</td><td>{service.isCustom && <><button className="table-action" type="button" disabled={reviewingOfferId === service.id || service.reviewStatus === 'APPROVED'} onClick={() => void reviewProviderOffer('agents', service.id, 'APPROVED')}>{reviewingOfferId === service.id ? 'Saving…' : 'Approve'}</button><button className="table-action" type="button" disabled={reviewingOfferId === service.id || service.reviewStatus === 'REJECTED'} onClick={() => void reviewProviderOffer('agents', service.id, 'REJECTED')}>Reject</button></>}</td></tr>)}
+            {partners.agentServices.length === 0 && <tr><td colSpan={6}><div className="table-empty"><strong>No agent offerings configured</strong></div></td></tr>}
           </tbody></table></div>
         </>}
       </>}

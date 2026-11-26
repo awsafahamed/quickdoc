@@ -33,6 +33,7 @@ export class AttestationCatalogService {
     pickupDistanceKm: number,
     returnDistanceKm: number,
     express: boolean,
+    serviceFeeOverride?: number,
   ): Promise<AttestationQuote> {
     const [service, storedRules] = await Promise.all([
       this.prisma.platformCatalogService.findFirst({
@@ -53,8 +54,6 @@ export class AttestationCatalogService {
         },
       }),
     ]);
-    if (!service) throw new NotFoundException('Attestation service was not found');
-
     const pricing: Record<string, number> = {
       ATTESTATION_PICKUP_BASE: 10,
       ATTESTATION_RETURN_BASE: 10,
@@ -65,7 +64,12 @@ export class AttestationCatalogService {
     for (const rule of storedRules) {
       if (rule.key in pricing) pricing[rule.key] = Number(rule.amount);
     }
-    const serviceFee = Number(service.serviceFee);
+    if (!service && serviceFeeOverride === undefined) {
+      throw new NotFoundException('Attestation service was not found');
+    }
+    const serviceFee = serviceFeeOverride !== undefined
+      ? serviceFeeOverride
+      : Number(service?.serviceFee);
     const pickupDelivery = pricing.ATTESTATION_PICKUP_BASE + pickupDistanceKm * pricing.ATTESTATION_DELIVERY_PER_KM;
     const returnDelivery = pricing.ATTESTATION_RETURN_BASE + returnDistanceKm * pricing.ATTESTATION_DELIVERY_PER_KM;
     const expressFee = express ? pricing.ATTESTATION_EXPRESS_FEE : 0;

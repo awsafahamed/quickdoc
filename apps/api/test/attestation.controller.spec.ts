@@ -50,7 +50,15 @@ describe('AttestationController customer bookings', () => {
         findFirst: jest.fn().mockResolvedValue(service),
       },
       agentProfile: {
-        findFirst: jest.fn().mockResolvedValue({ id: bookingDto.agentId }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: bookingDto.agentId,
+          services: [{
+            code: service.code,
+            name: 'Degree Attestation',
+            price: 180,
+            estimatedDays: 7,
+          }],
+        }),
       },
       platformPricingRule: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((callback: (tx: typeof transaction) => unknown) => callback(transaction)),
@@ -63,7 +71,7 @@ describe('AttestationController customer bookings', () => {
       bookingDto,
     );
 
-    expect(catalogue.quote).toHaveBeenCalledWith('degree', 5, 5, false);
+    expect(catalogue.quote).toHaveBeenCalledWith('degree', 5, 5, false, 180);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(transaction.attestationJob.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
@@ -102,5 +110,58 @@ describe('AttestationController customer bookings', () => {
       bookingDto,
     )).rejects.toBeInstanceOf(BadRequestException);
     expect(catalogue.quote).not.toHaveBeenCalled();
+  });
+
+  it('quotes the selected agent service price', async () => {
+    const prisma = {
+      platformCatalogService: {
+        findFirst: jest.fn().mockResolvedValue({ code: bookingDto.serviceId }),
+      },
+      agentProfile: {
+        findFirst: jest.fn().mockResolvedValue({ services: [{ price: 2400 }] }),
+      },
+    };
+    const catalogue = { quote: jest.fn().mockResolvedValue(quote) } as unknown as AttestationCatalogService;
+    const controller = new AttestationController(catalogue, prisma as unknown as PrismaService);
+
+    await controller.createQuote({
+      serviceId: bookingDto.serviceId,
+      agentId: bookingDto.agentId,
+      pickupDistanceKm: 5,
+      returnDistanceKm: 5,
+      express: false,
+    });
+
+    expect(catalogue.quote).toHaveBeenCalledWith('degree', 5, 5, false, 2400);
+  });
+
+  it('returns agent-specific prices with available services', async () => {
+    const prisma = {
+      platformCatalogService: {
+        findFirst: jest.fn().mockResolvedValue({ code: bookingDto.serviceId }),
+      },
+      agentProfile: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: bookingDto.agentId,
+          businessName: 'ClearPath',
+          address: 'Colombo',
+          services: [{ estimatedDays: 8, price: 2400 }],
+        }]),
+      },
+    };
+    const controller = new AttestationController(
+      { quote: jest.fn() } as unknown as AttestationCatalogService,
+      prisma as unknown as PrismaService,
+    );
+
+    const result = await controller.listAvailableAgents({ serviceId: bookingDto.serviceId });
+
+    expect(result.data).toEqual([{
+      id: bookingDto.agentId,
+      businessName: 'ClearPath',
+      address: 'Colombo',
+      estimatedDays: 8,
+      serviceFee: 2400,
+    }]);
   });
 });

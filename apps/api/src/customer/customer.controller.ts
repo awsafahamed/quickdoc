@@ -1,7 +1,7 @@
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Type } from 'class-transformer';
-import { IsEmail, IsEnum, IsOptional, IsString, Length, IsNumber, Min, IsUUID, IsBoolean, Max, IsInt } from 'class-validator';
+import { ArrayMaxSize, ArrayUnique, IsArray, IsEmail, IsEnum, IsOptional, IsString, Length, IsNumber, Min, IsUUID, IsBoolean, Max, IsInt } from 'class-validator';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PrintPricingService } from '../print/print-pricing.service';
@@ -137,6 +137,13 @@ class PrintOrderDto {
 
   @IsString()
   clientKey!: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @ArrayUnique()
+  @IsString({ each: true })
+  shopServiceCodes?: string[];
 }
 
 @Controller('customer')
@@ -359,8 +366,10 @@ export class CustomerController {
       lamination: dto.lamination ?? false,
       deliverySpeed: dto.deliverySpeed ?? DeliverySpeed.STANDARD,
       deliveryDistanceKm: dto.deliveryDistanceKm ?? 0,
+      shopId: dto.shopId,
+      shopServiceCodes: dto.shopServiceCodes ?? [],
     });
-    const printSubtotal = Number((quote.printing + quote.finishing).toFixed(2));
+    const printSubtotal = Number((quote.printing + quote.finishing + quote.shopServiceTotal).toFixed(2));
     const deliveryFee = Number((quote.delivery + quote.express).toFixed(2));
     const platformFee = Number((quote.total - printSubtotal - deliveryFee).toFixed(2));
     const commission = Number((printSubtotal * 0.1).toFixed(2));
@@ -369,8 +378,9 @@ export class CustomerController {
     const pin = randomBytes(3).toString('hex').toUpperCase();
     const pickupCode = randomBytes(3).toString('hex').toUpperCase();
     const order = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.order.create({ data: { id: randomUUID(), reference, customerId: request.user.id, shopId: dto.shopId, status: 'PENDING_ACCEPTANCE', currency: 'LKR', printSubtotal, deliveryFee, platformFee, total, commission, deliverySpeed: dto.deliverySpeed ?? DeliverySpeed.STANDARD, deliveryDistanceKm: dto.deliveryDistanceKm ?? 0, deliveryAddress: { line: dto.deliveryAddress }, instructions: dto.instructions, deliveryPinHash: createHash('sha256').update(pin).digest('hex'), pickupCodeHash: createHash('sha256').update(pickupCode).digest('hex'), clientKey: dto.clientKey } });
-      await tx.orderItem.create({ data: { id: randomUUID(), orderId: created.id, documentId: dto.documentId, paperSize: dto.paperSize, colour: dto.colour, duplex: dto.duplex, copies: dto.copies, pageRange: 'ALL', printedSides: dto.printedSides, orientation: 'PORTRAIT', binding: dto.binding ? 'BINDING' : null, stapling: dto.stapling ?? false, lamination: dto.lamination ?? false, unitPrice: printSubtotal / dto.copies, total: printSubtotal } });
+      const created = await tx.order.create({ data: { id: randomUUID(), reference, customerId: request.user.id, shopId: dto.shopId, status: 'PENDING_ACCEPTANCE', currency: 'LKR', printSubtotal, deliveryFee, platformFee, total, commission, deliverySpeed: dto.deliverySpeed ?? DeliverySpeed.STANDARD, deliveryDistanceKm: dto.deliveryDistanceKm ?? 0, deliveryAddress: { line: dto.deliveryAddress }, instructions: dto.instructions, deliveryPinHash: createHash('sha256').update(pin).digest('hex'), pickupCodeHash: createHash('sha256').update(pickupCode).digest('hex'), clientKey: dto.clientKey, shopServiceSnapshot: quote.shopServices.map((service) => ({ code: service.code, name: service.name, price: service.price })) } });
+      const documentPrintTotal = Number((quote.printing + quote.finishing).toFixed(2));
+      await tx.orderItem.create({ data: { id: randomUUID(), orderId: created.id, documentId: dto.documentId, paperSize: dto.paperSize, colour: dto.colour, duplex: dto.duplex, copies: dto.copies, pageRange: 'ALL', printedSides: dto.printedSides, orientation: 'PORTRAIT', binding: dto.binding ? 'BINDING' : null, stapling: dto.stapling ?? false, lamination: dto.lamination ?? false, unitPrice: documentPrintTotal / dto.copies, total: documentPrintTotal } });
       await tx.orderStatusHistory.create({ data: { id: randomUUID(), orderId: created.id, status: 'PENDING_ACCEPTANCE', actorId: request.user.id } });
       return created;
     });
