@@ -65,3 +65,39 @@ describe('shop order document previews', () => {
     expect(storage.createPreviewUrl).not.toHaveBeenCalled();
   });
 });
+
+describe('shop order transitions', () => {
+  it('rejects a status jump that skips the production workflow', async () => {
+    const prisma = {
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      order: { findFirst: jest.fn().mockResolvedValue({ id: 'order-id', status: 'PENDING_ACCEPTANCE' }) },
+      $transaction: jest.fn(),
+    } as unknown as PrismaService;
+    const storage = { createPreviewUrl: jest.fn() } as unknown as PrivateObjectStorageService;
+    const controller = new ShopPortalController(prisma, storage);
+
+    await expect(controller.transition(
+      { user: { id: 'owner-id' } },
+      'order-id',
+      { status: 'PRINTING' },
+    )).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('requires a reason to decline a customer order', async () => {
+    const prisma = {
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      order: { findFirst: jest.fn().mockResolvedValue({ id: 'order-id', status: 'PENDING_ACCEPTANCE' }) },
+      $transaction: jest.fn(),
+    } as unknown as PrismaService;
+    const storage = { createPreviewUrl: jest.fn() } as unknown as PrivateObjectStorageService;
+    const controller = new ShopPortalController(prisma, storage);
+
+    await expect(controller.transition(
+      { user: { id: 'owner-id' } },
+      'order-id',
+      { status: 'REJECTED', reason: '  ' },
+    )).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});

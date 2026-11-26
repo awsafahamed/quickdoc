@@ -106,3 +106,58 @@ describe('CustomerController print orders', () => {
     }));
   });
 });
+
+describe('CustomerController delivery confirmation', () => {
+  it('completes only the signed-in customer’s delivered order and notifies the shop and rider', async () => {
+    const transaction = {
+      order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      orderStatusHistory: { create: jest.fn() },
+      notification: { createMany: jest.fn() },
+    };
+    const prisma = {
+      order: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'order-id',
+          reference: 'PR-123',
+          status: 'DELIVERED',
+          customerId: 'customer-id',
+          Shop: { ownerId: 'shop-owner-id' },
+          DeliveryAssignment: { riderId: 'rider-id' },
+        }),
+      },
+      $transaction: jest.fn((callback: (tx: typeof transaction) => Promise<void>) => callback(transaction)),
+    } as unknown as PrismaService;
+    const controller = new CustomerController(prisma, {} as PrintPricingService, {} as PrivateObjectStorageService);
+
+    const result = await controller.confirmDelivery('order-id', { user: { id: 'customer-id' } });
+
+    expect(prisma.order.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'order-id', customerId: 'customer-id' },
+    }));
+    expect(transaction.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-id', customerId: 'customer-id', status: 'DELIVERED' },
+      data: { status: 'COMPLETED' },
+    });
+    expect(transaction.notification.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ userId: 'shop-owner-id', title: 'Delivery confirmed' }),
+        expect.objectContaining({ userId: 'rider-id', title: 'Delivery confirmed' }),
+      ]),
+    });
+    expect(result.data.status).toBe('COMPLETED');
+  });
+
+  it('rejects confirmation before the order reaches delivered status', async () => {
+    const prisma = {
+      order: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'order-id', status: 'OUT_FOR_DELIVERY' }),
+      },
+      $transaction: jest.fn(),
+    } as unknown as PrismaService;
+    const controller = new CustomerController(prisma, {} as PrintPricingService, {} as PrivateObjectStorageService);
+
+    await expect(controller.confirmDelivery('order-id', { user: { id: 'customer-id' } }))
+      .rejects.toThrow('Only a delivered order can be confirmed');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});

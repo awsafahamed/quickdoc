@@ -8,6 +8,7 @@ import {
   NotFoundException,
   Param,
   Patch,
+  ParseUUIDPipe,
   Post,
   Req,
   UseGuards,
@@ -284,6 +285,179 @@ export class RidersController {
     };
   }
 
+  @Get('me/offers')
+  @UseGuards(AuthGuard('jwt'))
+  async offers(@Req() request: AuthenticatedRequest) {
+    const profile = await this.approvedProfileFor(request);
+    return {
+      data: await this.prisma.deliveryOffer.findMany({
+        where: {
+          riderId: profile.userId,
+          status: 'PENDING',
+          Order: { is: { status: 'READY_FOR_PICKUP' } },
+        },
+        select: {
+          id: true,
+          distanceKm: true,
+          earnings: true,
+          createdAt: true,
+          Order: {
+            select: {
+              reference: true,
+              Shop: { select: { name: true, address: true } },
+            },
+          },
+        },
+        orderBy: [{ distanceKm: 'asc' }, { createdAt: 'asc' }],
+      }),
+    };
+  }
+
+  @Post('me/offers/:offerId/accept')
+  @UseGuards(AuthGuard('jwt'))
+  async acceptOffer(
+    @Param('offerId', new ParseUUIDPipe()) offerId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    const profile = await this.approvedProfileFor(request);
+    const offer = await this.prisma.deliveryOffer.findFirst({
+      where: {
+        id: offerId,
+        riderId: profile.userId,
+        status: 'PENDING',
+        Order: { is: { status: 'READY_FOR_PICKUP' } },
+      },
+      include: { Order: { include: { Shop: true } } },
+    });
+    if (!offer) throw new NotFoundException('This delivery offer is no longer available');
+
+    return {
+      data: await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.order.updateMany({
+          where: { id: offer.orderId, status: 'READY_FOR_PICKUP' },
+          data: { status: 'RIDER_ASSIGNED' },
+        });
+        if (claimed.count !== 1) {
+          throw new ConflictException('Another rider has already accepted this delivery');
+        }
+        const accepted = await transaction.deliveryOffer.updateMany({
+          where: { id: offer.id, riderId: profile.userId, status: 'PENDING' },
+          data: { status: 'ACCEPTED', updatedAt: new Date() },
+        });
+        if (accepted.count !== 1) {
+          throw new ConflictException('This delivery offer is no longer available');
+        }
+
+        const now = new Date();
+        const assignment = await transaction.deliveryAssignment.create({
+          data: {
+            id: randomUUID(),
+            orderId: offer.orderId,
+            riderId: profile.userId,
+            earnings: offer.earnings,
+            assignedAt: now,
+            updatedAt: now,
+          },
+        });
+        await transaction.deliveryStatusHistory.create({
+          data: {
+            id: randomUUID(),
+            assignmentId: assignment.id,
+            status: 'ACCEPTED',
+          },
+        });
+        await transaction.orderStatusHistory.create({
+          data: {
+            id: randomUUID(),
+            orderId: offer.orderId,
+            status: 'RIDER_ASSIGNED',
+            actorId: request.user.id,
+            reason: 'Accepted nearby rider offer',
+          },
+        });
+        await transaction.deliveryOffer.updateMany({
+          where: { orderId: offer.orderId, status: 'PENDING' },
+          data: { status: 'EXPIRED', updatedAt: now },
+        });
+        await transaction.notification.createMany({
+          data: [
+            {
+              id: randomUUID(),
+              userId: offer.Order.customerId,
+              title: 'Rider assigned',
+              body: `A rider accepted delivery for order ${offer.Order.reference}.`,
+              createdAt: now,
+            },
+            {
+              id: randomUUID(),
+              userId: offer.Order.Shop.ownerId,
+              title: 'Rider accepted delivery',
+              body: `A rider accepted delivery for order ${offer.Order.reference}.`,
+              createdAt: now,
+            },
+          ],
+        });
+        return assignment;
+      }),
+    };
+  }
+
+  @Post('me/offers/:offerId/reject')
+  @UseGuards(AuthGuard('jwt'))
+  async rejectOffer(
+    @Param('offerId', new ParseUUIDPipe()) offerId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    const profile = await this.approvedProfileFor(request);
+    const rejected = await this.prisma.deliveryOffer.updateMany({
+      where: {
+        id: offerId,
+        riderId: profile.userId,
+        status: 'PENDING',
+        Order: { is: { status: 'READY_FOR_PICKUP' } },
+      },
+      data: { status: 'REJECTED', updatedAt: new Date() },
+    });
+    if (!rejected.count) {
+      throw new NotFoundException('This delivery offer is no longer available');
+    }
+    return { data: { rejected: true } };
+  }
+
+  @Get('me/notifications')
+  @UseGuards(AuthGuard('jwt'))
+  async notifications(@Req() request: AuthenticatedRequest) {
+    await this.profileFor(request);
+    return {
+      data: await this.prisma.notification.findMany({
+        where: { userId: request.user.id },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+      }),
+    };
+  }
+
+  @Patch('me/notifications/:notificationId/read')
+  @UseGuards(AuthGuard('jwt'))
+  async markNotificationRead(
+    @Param('notificationId', new ParseUUIDPipe()) notificationId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    await this.profileFor(request);
+    const updated = await this.prisma.notification.updateMany({
+      where: { id: notificationId, userId: request.user.id, readAt: null },
+      data: { readAt: new Date() },
+    });
+    if (!updated.count) {
+      const notification = await this.prisma.notification.findFirst({
+        where: { id: notificationId, userId: request.user.id },
+        select: { id: true },
+      });
+      if (!notification) throw new NotFoundException('Notification was not found');
+    }
+    return { data: { read: true } };
+  }
+
   @Post('assignments/:id/accept')
   @UseGuards(AuthGuard('jwt'))
   async accept(
@@ -293,7 +467,7 @@ export class RidersController {
     const profile = await this.approvedProfileFor(request);
     const assignment = await this.prisma.deliveryAssignment.findFirst({
       where: { id, riderId: profile.userId },
-      include: { Order: true },
+      include: { Order: { include: { Shop: true } } },
     });
     if (!assignment) throw new NotFoundException('Delivery assignment was not found');
     if (assignment.Order.status !== 'RIDER_ASSIGNED') {
@@ -320,7 +494,7 @@ export class RidersController {
     const profile = await this.approvedProfileFor(request);
     const assignment = await this.prisma.deliveryAssignment.findFirst({
       where: { id, riderId: profile.userId },
-      include: { Order: true },
+      include: { Order: { include: { Shop: true } } },
     });
     if (!assignment) throw new NotFoundException('Delivery assignment was not found');
     if (assignment.Order.status !== 'RIDER_ASSIGNED') {
@@ -348,7 +522,7 @@ export class RidersController {
     const profile = await this.approvedProfileFor(request);
     const assignment = await this.prisma.deliveryAssignment.findFirst({
       where: { id, riderId: profile.userId },
-      include: { Order: true },
+      include: { Order: { include: { Shop: true } } },
     });
     if (!assignment) throw new NotFoundException('Delivery assignment was not found');
     const transition = statusTransitions[dto.status];
@@ -399,6 +573,29 @@ export class RidersController {
               actorId: request.user.id,
               reason: dto.reason,
             },
+          });
+        }
+        const progressMessages: Partial<Record<typeof dto.status, string>> = {
+          ARRIVED_PICKUP: `A rider arrived at the shop for order ${assignment.Order.reference}.`,
+          PICKED_UP: `Order ${assignment.Order.reference} has been picked up.`,
+          ARRIVED_DROPOFF: `Order ${assignment.Order.reference} is out for delivery.`,
+          DELIVERED: `Order ${assignment.Order.reference} was delivered. Confirm receipt in your QuickDoc account.`,
+          FAILED: `Delivery for order ${assignment.Order.reference} could not be completed${dto.reason?.trim() ? `: ${dto.reason.trim()}` : '.'}`,
+        };
+        const message = progressMessages[dto.status];
+        const recipients = [...new Set([
+          assignment.Order.customerId,
+          assignment.Order.Shop?.ownerId,
+        ].filter((userId): userId is string => Boolean(userId)))];
+        if (message && recipients.length) {
+          await transaction.notification.createMany({
+            data: recipients.map((userId) => ({
+              id: randomUUID(),
+              userId,
+              title: 'Delivery status update',
+              body: message,
+              createdAt: new Date(),
+            })),
           });
         }
         return history;

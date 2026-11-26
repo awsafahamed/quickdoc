@@ -20,6 +20,7 @@ import {
   IsString,
   Length,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 import { randomUUID } from 'node:crypto';
@@ -34,7 +35,7 @@ class InventoryItemDto {
 }
 
 class CustomerQueryDto {
-  @IsOptional() @IsString() search?: string;
+  @IsOptional() @IsString() @MaxLength(100) search?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 10;
 }
@@ -45,7 +46,9 @@ export class ShopPortalOperationsController {
   constructor(private readonly prisma: PrismaService) {}
 
   private async shopForOwner(userId: string) {
-    const shop = await this.prisma.shop.findFirst({ where: { ownerId: userId } });
+    const shop = await this.prisma.shop.findFirst({
+      where: { OR: [{ ownerId: userId }, { staff: { some: { userId } } }] },
+    });
     if (!shop) throw new NotFoundException('No print shop is linked to this account');
     return shop;
   }

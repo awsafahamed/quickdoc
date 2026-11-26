@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Type } from 'class-transformer';
 import { IsEmail, IsEnum, IsOptional, IsString, Length, IsNumber, Min, IsUUID, IsBoolean, Max, IsInt } from 'class-validator';
@@ -250,6 +250,90 @@ export class CustomerController {
     const order = await this.prisma.order.findFirst({ where: { id, customerId: request.user.id }, include: { Shop: true, OrderItem: true, OrderStatusHistory: { orderBy: { createdAt: 'desc' } }, DeliveryAssignment: { include: { DeliveryStatusHistory: { orderBy: { createdAt: 'desc' } } } }, Payment: true } });
     if (!order) throw new BadRequestException('Order was not found');
     return { data: order };
+  }
+
+  @Post('orders/:id/confirm-delivery')
+  async confirmDelivery(@Param('id') id: string, @Req() request: { user: { id: string } }) {
+    const order = await this.prisma.order.findFirst({
+      where: { id, customerId: request.user.id },
+      include: { Shop: true, DeliveryAssignment: true },
+    });
+    if (!order) throw new NotFoundException('Order was not found');
+    if (order.status !== 'DELIVERED') {
+      throw new ConflictException('Only a delivered order can be confirmed');
+    }
+
+    await this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.order.updateMany({
+        where: { id, customerId: request.user.id, status: 'DELIVERED' },
+        data: { status: 'COMPLETED' },
+      });
+      if (updated.count !== 1) {
+        throw new ConflictException('This order changed; refresh and try again');
+      }
+      await transaction.orderStatusHistory.create({
+        data: {
+          id: randomUUID(),
+          orderId: id,
+          status: 'COMPLETED',
+          actorId: request.user.id,
+          reason: 'Customer confirmed delivery',
+        },
+      });
+      const recipients = [...new Set(
+        [order.Shop.ownerId, order.DeliveryAssignment?.riderId]
+          .filter((userId): userId is string => Boolean(userId)),
+      )];
+      await transaction.notification.createMany({
+        data: recipients.map((userId) => ({
+          id: randomUUID(),
+          userId,
+          title: 'Delivery confirmed',
+          body: `The customer confirmed delivery for order ${order.reference}.`,
+          createdAt: new Date(),
+        })),
+      });
+    });
+    return { data: { id: order.id, reference: order.reference, status: 'COMPLETED' } };
+  }
+
+  @Get('notifications')
+  async notifications(@Req() request: { user: { id: string } }) {
+    return {
+      data: await this.prisma.notification.findMany({
+        where: { userId: request.user.id },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+      }),
+    };
+  }
+
+  @Patch('notifications/read-all')
+  async markAllNotificationsRead(@Req() request: { user: { id: string } }) {
+    const result = await this.prisma.notification.updateMany({
+      where: { userId: request.user.id, readAt: null },
+      data: { readAt: new Date() },
+    });
+    return { data: { updated: result.count } };
+  }
+
+  @Patch('notifications/:id/read')
+  async markNotificationRead(
+    @Param('id') id: string,
+    @Req() request: { user: { id: string } },
+  ) {
+    const updated = await this.prisma.notification.updateMany({
+      where: { id, userId: request.user.id, readAt: null },
+      data: { readAt: new Date() },
+    });
+    if (!updated.count) {
+      const notification = await this.prisma.notification.findFirst({
+        where: { id, userId: request.user.id },
+        select: { id: true },
+      });
+      if (!notification) throw new NotFoundException('Notification was not found');
+    }
+    return { data: { read: true } };
   }
 
   @Post('orders/print')

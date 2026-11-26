@@ -14,7 +14,8 @@ type View =
   | 'team'
   | 'profile'
   | 'settings'
-  | 'notifications';
+  | 'notifications'
+  | 'support';
 
 type ShopProfile = {
   id: string;
@@ -55,6 +56,7 @@ type Order = {
   }[];
   OrderStatusHistory: { id: string; status: string; reason?: string | null; createdAt: string }[];
   DeliveryAssignment?: { id: string; riderId: string; earnings: number | string; updatedAt: string } | null;
+  DeliveryOffer?: { id: string }[];
   Payment?: { status: string; method: string; amount: number | string } | null;
 };
 
@@ -96,7 +98,7 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v
 const navGroups: { label: string; items: { id: View; label: string; icon: string }[] }[] = [
   { label: 'Workspace', items: [{ id: 'overview', label: 'Overview', icon: 'grid' }, { id: 'orders', label: 'Orders', icon: 'orders' }, { id: 'delivery', label: 'Delivery handover', icon: 'delivery' }] },
   { label: 'Manage', items: [{ id: 'services', label: 'Services & pricing', icon: 'tag' }, { id: 'inventory', label: 'Inventory', icon: 'box' }, { id: 'customers', label: 'Customers', icon: 'users' }] },
-  { label: 'Business', items: [{ id: 'earnings', label: 'Earnings & payouts', icon: 'wallet' }, { id: 'reports', label: 'Reports', icon: 'chart' }, { id: 'team', label: 'Team access', icon: 'team' }, { id: 'profile', label: 'Shop profile', icon: 'shop' }, { id: 'settings', label: 'Settings', icon: 'settings' }] },
+  { label: 'Business', items: [{ id: 'earnings', label: 'Earnings & payouts', icon: 'wallet' }, { id: 'reports', label: 'Reports', icon: 'chart' }, { id: 'team', label: 'Team access', icon: 'team' }, { id: 'profile', label: 'Shop profile', icon: 'shop' }, { id: 'settings', label: 'Settings', icon: 'settings' }, { id: 'support', label: 'Help & support', icon: 'bell' }] },
 ];
 
 const serviceOptions = [
@@ -321,6 +323,7 @@ function PortalWorkspace({ initialShop, onSignOut }: { initialShop: ShopProfile;
       {view === 'profile' && <ProfilePage shop={shop} onSave={setShop} />}
       {view === 'settings' && <SettingsPage theme={theme} onThemeChange={setTheme} onSignOut={onSignOut} />}
       {view === 'notifications' && <NotificationsPage onUnreadChange={setNoticeCount} />}
+      {view === 'support' && <SupportPage />}
     </main>
   </div>;
 }
@@ -349,12 +352,21 @@ function StatusBadge({ status }: { status: string }) {
 
 function DashboardPage({ shop, onShopUpdate, onNavigate }: { shop: ShopProfile; onShopUpdate: (shop: ShopProfile) => void; onNavigate: (view: View) => void }) {
   const { data: orders, loading: ordersLoading, error: ordersError, reload: reloadOrders } = useRemote<Order[]>('/shop/me/orders', []);
-  const { data: earnings, loading: earningsLoading, error: earningsError } = useRemote<{ earned: number; pending: number; settlements: Settlement[] }>('/shop/me/earnings', { earned: 0, pending: 0, settlements: [] });
+  const { data: earnings, loading: earningsLoading, error: earningsError, reload: reloadEarnings } = useRemote<{ earned: number; pending: number; settlements: Settlement[] }>('/shop/me/earnings', { earned: 0, pending: 0, settlements: [] });
   const [availabilityBusy, setAvailabilityBusy] = useState(false);
   const [availabilityError, setAvailabilityError] = useState('');
   const todayCount = orders.filter((order) => new Date(order.createdAt).toDateString() === new Date().toDateString()).length;
   const awaiting = orders.filter((order) => ['PENDING_ACCEPTANCE', 'ACCEPTED', 'PRINTING'].includes(order.status)).length;
   const series = useMemo(() => lastSevenDays(orders), [orders]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        reloadOrders();
+        reloadEarnings();
+      }
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [reloadEarnings, reloadOrders]);
   const toggleAvailability = async () => {
     setAvailabilityBusy(true);
     setAvailabilityError('');
@@ -470,8 +482,27 @@ function Pagination({ page, pages, total, onChange }: { page: number; pages: num
 
 function DeliveryPage() {
   const { data: orders, loading, error, reload } = useRemote<Order[]>('/shop/me/orders', []);
+  const [dispatching, setDispatching] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [message, setMessage] = useState('');
   const deliveries = orders.filter((order) => ['READY_FOR_PICKUP', 'RIDER_ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'].includes(order.status));
-  return <section className="content"><PageHeader title="Delivery handover" description="Follow print jobs through pickup and customer delivery. Handover codes remain private to the assigned rider." />{error && <LoadError message={error} retry={reload} />}{loading ? <div className="panel"><LoadingRows count={5} /></div> : deliveries.length ? <div className="panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Ready since</th><th>Rider assignment</th><th>Status</th><th className="align-right">Total</th></tr></thead><tbody>{deliveries.map((order) => <tr key={order.id}><td><strong className="order-reference">{order.reference}</strong></td><td>{order.customer.name}</td><td>{dateLabel(order.updatedAt)}</td><td>{order.DeliveryAssignment ? `Assigned · ${order.DeliveryAssignment.riderId.slice(0, 8)}` : order.status === 'READY_FOR_PICKUP' ? 'Waiting for rider' : 'Assignment unavailable'}</td><td><StatusBadge status={order.status} /></td><td className="align-right amount-cell">{money(order.total, order.currency)}</td></tr>)}</tbody></table></div><div className="delivery-note"><Icon name="delivery" size={18} /><p>Order handover is recorded by the assigned rider. Pickup codes and delivery PINs are validated by the API and are never shown in this portal.</p></div></div> : <EmptyState title="No deliveries in progress" body="Orders marked ready for pickup and their rider assignments will appear here." />}</section>;
+  const dispatch = async (order: Order) => {
+    setDispatching(order.id);
+    setActionError('');
+    setMessage('');
+    try {
+      const result = await api<Envelope<{ notifiedRiders: number }>>(`/shop/me/orders/${encodeURIComponent(order.id)}/dispatch`, { method: 'POST' });
+      setMessage(result.data.notifiedRiders
+        ? `Delivery request sent to ${result.data.notifiedRiders} nearby rider${result.data.notifiedRiders === 1 ? '' : 's'}.`
+        : 'No approved online riders with a recent location were found within 8 km.');
+      reload();
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : 'Nearby riders could not be notified.');
+    } finally {
+      setDispatching('');
+    }
+  };
+  return <section className="content"><PageHeader title="Delivery handover" description="Nearby approved riders are notified when an order is ready. Pickup codes and delivery PINs remain private to the assigned rider." />{error && <LoadError message={error} retry={reload} />}{actionError && <LoadError message={actionError} />}{message && <p className="success-message" role="status">{message}</p>}{loading ? <div className="panel"><LoadingRows count={5} /></div> : deliveries.length ? <div className="panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Ready since</th><th>Rider assignment</th><th>Status</th><th className="align-right">Total</th></tr></thead><tbody>{deliveries.map((order) => <tr key={order.id}><td><strong className="order-reference">{order.reference}</strong></td><td>{order.customer.name}</td><td>{dateLabel(order.updatedAt)}</td><td>{order.DeliveryAssignment ? `Assigned · ${order.DeliveryAssignment.riderId.slice(0, 8)}` : order.status === 'READY_FOR_PICKUP' ? `${order.DeliveryOffer?.length ?? 0} rider offers pending` : 'Assignment unavailable'}</td><td><StatusBadge status={order.status} /></td><td className="align-right amount-cell">{money(order.total, order.currency)}{order.status === 'READY_FOR_PICKUP' && !order.DeliveryAssignment && !order.DeliveryOffer?.length && <button className="text-button dispatch-action" type="button" disabled={dispatching === order.id} onClick={() => void dispatch(order)}>{dispatching === order.id ? 'Notifying…' : 'Notify nearby riders'}</button>}</td></tr>)}</tbody></table></div><div className="delivery-note"><Icon name="delivery" size={18} /><p>Riders within 8 km with a recent location update are notified. The first rider to accept receives the delivery assignment.</p></div></div> : <EmptyState title="No deliveries in progress" body="Orders marked ready for pickup and their rider assignments will appear here." />}</section>;
 }
 
 function ServicesPage() {
@@ -655,4 +686,56 @@ function NotificationsPage({ onUnreadChange }: { onUnreadChange: (count: number)
     finally { setBusy(''); }
   };
   return <section className="content"><PageHeader title="Notifications" description="Updates attached to your shop-owner account." />{error && <LoadError message={error} retry={reload} />}{actionError && <LoadError message={actionError} />}{loading ? <div className="panel"><LoadingRows /></div> : notices.length ? <div className="panel notification-list">{notices.map((notice) => <article className={`notification-row ${notice.readAt ? '' : 'notification-row--unread'}`} key={notice.id}><span className="notification-mark"><Icon name="bell" size={17} /></span><div className="notification-copy"><strong>{notice.title}</strong><p>{notice.body}</p><small>{dateLabel(notice.createdAt, { dateStyle: 'medium', timeStyle: 'short' })}</small></div>{!notice.readAt && <button className="text-button" type="button" disabled={busy === notice.id} onClick={() => void markRead(notice)}>{busy === notice.id ? 'Saving…' : 'Mark read'}</button>}</article>)}</div> : <EmptyState title="You're all caught up" body="Shop-owner updates will appear here when the platform sends them." />}</section>;
+}
+
+type SupportTicket = {
+  id: string;
+  reference: string;
+  subject: string;
+  status: string;
+  priority: string;
+  createdAt: string;
+  updatedAt: string;
+  messages?: { id: string; body: string; createdAt: string; senderId: string; sender?: { name: string } }[];
+};
+
+function SupportPage() {
+  const { data: tickets, loading, error, reload } = useRemote<SupportTicket[]>('/shop/me/support', []);
+  const [selected, setSelected] = useState<SupportTicket | null>(null);
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [reply, setReply] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [message, setMessage] = useState('');
+  const createTicket = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setActionError(''); setMessage('');
+    try {
+      const result = await api<Envelope<SupportTicket>>('/shop/me/support', { method: 'POST', json: { subject: subject.trim(), body: body.trim() } });
+      setSubject(''); setBody(''); setSelected(result.data); reload(); setMessage('Support request submitted.');
+    } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Support request could not be submitted.'); }
+    finally { setBusy(false); }
+  };
+  const openTicket = async (ticket: SupportTicket) => {
+    setActionError('');
+    try {
+      const result = await api<Envelope<SupportTicket>>(`/shop/me/support/${ticket.id}`);
+      setSelected(result.data);
+    } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Support conversation could not be loaded.'); }
+  };
+  const sendReply = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selected) return;
+    setBusy(true); setActionError(''); setMessage('');
+    try {
+      const result = await api<Envelope<SupportTicket>>(`/shop/me/support/${selected.id}/messages`, { method: 'POST', json: { body: reply.trim() } });
+      setSelected(result.data); setReply(''); reload();
+    } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Reply could not be sent.'); }
+    finally { setBusy(false); }
+  };
+  return <section className="content"><PageHeader title="Help & support" description="Create a request or continue a conversation with the QuickDoc support team." />{error && <LoadError message={error} retry={reload} />}{actionError && <LoadError message={actionError} />}{message && <p className="success-message" role="status">{message}</p>}
+    <div className="support-layout"><form className="panel support-form" onSubmit={(event) => void createTicket(event)}><div className="panel-heading"><div><h2>Contact support</h2><p>Tell us what you need help with.</p></div></div><label>Subject<input required minLength={3} maxLength={160} value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="How can we help?" /></label><label>Details<textarea required minLength={1} maxLength={5000} rows={6} value={body} onChange={(event) => setBody(event.target.value)} placeholder="Describe the issue or question…" /></label><button className="button button--primary" disabled={busy}>{busy ? 'Sending…' : 'Send support request'}</button></form>
+      <section className="panel support-tickets"><div className="panel-heading"><div><h2>Your requests</h2><p>Replies and status are kept in your account.</p></div></div>{loading ? <LoadingRows /> : tickets.length ? <div className="ticket-list">{tickets.map((ticket) => <button className={`ticket-row ${selected?.id === ticket.id ? 'ticket-row--selected' : ''}`} key={ticket.id} type="button" onClick={() => void openTicket(ticket)}><span className="ticket-row-copy"><strong>{ticket.subject}</strong><small>{ticket.reference} · Updated {dateLabel(ticket.updatedAt)}</small></span><StatusBadge status={ticket.status} /></button>)}</div> : <EmptyState title="No support requests" body="Your conversations will appear here after you contact the team." />}</section></div>
+    {selected && <section className="panel support-conversation"><div className="panel-heading"><div><h2>{selected.subject}</h2><p>{selected.reference} · <StatusBadge status={selected.status} /></p></div><button className="icon-button" type="button" aria-label="Close conversation" onClick={() => setSelected(null)}><Icon name="close" /></button></div><div className="conversation-messages">{selected.messages?.map((item) => <article className={`conversation-message ${item.senderId === selected.messages?.[0]?.senderId ? 'conversation-message--owner' : ''}`} key={item.id}><p>{item.body}</p><small>{item.sender?.name ?? 'Support'} · {dateLabel(item.createdAt, { dateStyle: 'medium', timeStyle: 'short' })}</small></article>)}</div><form className="reply-form" onSubmit={(event) => void sendReply(event)}><label className="sr-only" htmlFor="support-reply">Reply to support</label><textarea id="support-reply" required minLength={1} maxLength={5000} rows={3} value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Write a reply…" /><button className="button button--primary" disabled={busy || !reply.trim()}>{busy ? 'Sending…' : 'Send reply'}</button></form></section>}
+  </section>;
 }

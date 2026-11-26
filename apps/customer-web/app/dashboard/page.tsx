@@ -20,9 +20,17 @@ const navigation: { id: View; label: string; icon: IconName }[] = [
   { id: 'support', label: 'Support', icon: 'help' },
 ];
 
-type Order = { id: string; type: string; detail: string; status: string; tone: 'blue' | 'green'; date: string };
-
-const orders: Order[] = [];
+type Order = {
+  id: string;
+  backendId?: string;
+  type: string;
+  detail: string;
+  status: string;
+  tone: 'blue' | 'green';
+  date: string;
+  payment?: { status: string; method: string; amount: number | string; currency: string } | null;
+};
+type CustomerNotification = { id: string; title: string; text: string; time: string; unread: boolean };
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, string> = {
@@ -55,13 +63,13 @@ function ServiceCard({ type, title, description, action }: { type: 'print' | 'at
   );
 }
 
-function OrderRow({ order }: { order: Order }) {
+function OrderRow({ order, onConfirmDelivery }: { order: Order; onConfirmDelivery?: (order: Order) => void }) {
   return (
     <div className="order-row">
       <div className="order-row__mark"><Icon name={order.type === 'Print & Deliver' ? 'print' : 'shield'} /></div>
       <div className="order-row__details"><strong>{order.type}</strong><span>{order.id} · {order.detail}</span></div>
       <div className="order-row__status"><span className={`status-dot status-dot--${order.tone}`} />{order.status}<small>{order.date}</small></div>
-      <button className="icon-button" aria-label={`View ${order.id}`} type="button"><Icon name="chevron" /></button>
+      {order.status === 'DELIVERED' && order.backendId && onConfirmDelivery && <button className="button button--secondary button--small" type="button" onClick={() => onConfirmDelivery(order)}>Confirm delivery</button>}
     </div>
   );
 }
@@ -84,9 +92,9 @@ export default function CustomerDashboardPage() {
   const [uploadedFile, setUploadedFile] = useState<string | null>(null);
   const [session, setSession] = useState<{ name: string; email: string; phone: string } | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState([
-    { id: 1, title: 'Welcome to QuickDoc', text: 'Your customer account is ready.', time: 'Now', unread: true },
-  ]);
+  const [notifications, setNotifications] = useState<CustomerNotification[]>([]);
+  const [orderNotice, setOrderNotice] = useState('');
+  const [orderError, setOrderError] = useState('');
   const [customerOrders, setCustomerOrders] = useState<Order[]>([]);
   const [documents, setDocuments] = useState<{ id: string; name: string; sizeBytes: number; pageCount: number | null; createdAt: string }[]>([]);
   const [addresses, setAddresses] = useState<{ id: string; label: string; line: string }[]>([]);
@@ -123,10 +131,10 @@ export default function CustomerDashboardPage() {
         })
         .catch(() => undefined);
       fetch(`${apiUrl}/customer/orders`, { headers: authHeaders })
-        .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; createdAt: string; Shop: { name: string } }[] }> : Promise.reject())
+        .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; createdAt: string; currency: string; Payment: { status: string; method: string; amount: number | string } | null; Shop: { name: string } }[] }> : Promise.reject())
         .then((result) => {
           setCustomerOrders((items) => [
-            ...result.data.map((order) => ({ id: order.reference, type: 'Print & Deliver', detail: order.Shop?.name ?? 'Printing shop', status: order.status, tone: 'blue' as const, date: new Date(order.createdAt).toLocaleDateString() })),
+            ...result.data.map((order) => ({ id: order.reference, backendId: order.id, type: 'Print & Deliver', detail: order.Shop?.name ?? 'Printing shop', status: order.status, tone: 'blue' as const, date: new Date(order.createdAt).toLocaleDateString(), payment: order.Payment ? { ...order.Payment, currency: order.currency } : null })),
             ...items.filter((order) => order.type === 'Attest & Return'),
           ]);
           setSupportOrders(result.data.map(({ id, reference }) => ({ id, reference })));
@@ -156,6 +164,16 @@ export default function CustomerDashboardPage() {
         .then((response) => response.ok ? response.json() as Promise<{ data: typeof addresses }> : Promise.reject())
         .then((result) => setAddresses(result.data))
         .catch(() => setAddresses([]));
+      fetch(`${apiUrl}/customer/notifications`, { headers: authHeaders })
+        .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; title: string; body: string; readAt: string | null; createdAt: string }[] }> : Promise.reject())
+        .then((result) => setNotifications(result.data.map((item) => ({
+          id: item.id,
+          title: item.title,
+          text: item.body,
+          time: new Date(item.createdAt).toLocaleString(),
+          unread: !item.readAt,
+        }))))
+        .catch(() => setNotifications([]));
     }
   }, []);
 
@@ -183,6 +201,50 @@ export default function CustomerDashboardPage() {
     window.localStorage.setItem('print-attest-session', JSON.stringify(savedSession));
   };
 
+  const confirmDelivery = async (order: Order) => {
+    if (!order.backendId) return;
+    setOrderError('');
+    setOrderNotice('');
+    try {
+      const accessToken = window.sessionStorage.getItem('print-attest-access-token');
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+      const response = await fetch(`${apiUrl}/customer/orders/${encodeURIComponent(order.backendId)}/confirm-delivery`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken ?? ''}` },
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => null) as { message?: string } | null;
+        throw new Error(result?.message ?? 'Delivery could not be confirmed. Refresh and try again.');
+      }
+      setCustomerOrders((items) => items.map((item) => item.backendId === order.backendId ? { ...item, status: 'COMPLETED' } : item));
+      setOrderNotice(`Delivery for ${order.id} confirmed.`);
+    } catch (caught) {
+      setOrderError(caught instanceof Error ? caught.message : 'Delivery could not be confirmed.');
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    const accessToken = window.sessionStorage.getItem('print-attest-access-token');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+    const response = await fetch(`${apiUrl}/customer/notifications/read-all`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${accessToken ?? ''}` },
+    });
+    if (!response.ok) throw new Error('Notifications could not be marked as read.');
+    setNotifications((items) => items.map((item) => ({ ...item, unread: false })));
+  };
+
+  const markNotificationRead = async (notificationId: string) => {
+    const accessToken = window.sessionStorage.getItem('print-attest-access-token');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+    const response = await fetch(`${apiUrl}/customer/notifications/${encodeURIComponent(notificationId)}/read`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${accessToken ?? ''}` },
+    });
+    if (!response.ok) throw new Error('Notification could not be marked as read.');
+    setNotifications((items) => items.map((item) => item.id === notificationId ? { ...item, unread: false } : item));
+  };
+
   return (
     <div className="portal">
       <aside className={`sidebar ${mobileNavOpen ? 'sidebar--open' : ''}`}>
@@ -202,16 +264,18 @@ export default function CustomerDashboardPage() {
         <header className="topbar">
           <button className="mobile-menu" type="button" aria-label="Open navigation" onClick={() => setMobileNavOpen((open) => !open)}><span /><span /><span /></button>
           <div className="breadcrumb"><span>Workspace</span><Icon name="chevron" /><strong>{currentLabel}</strong></div>
-          <div className="topbar__actions"><div className="notification-wrap"><button className="notification-button" type="button" aria-label={`${notifications.filter((item) => item.unread).length} unread notifications`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Icon name="bell" />{notifications.some((item) => item.unread) && <span />}</button>{notificationsOpen && <div className="notification-panel" role="dialog" aria-label="Notifications"><div className="notification-heading"><strong>Notifications</strong><button type="button" onClick={() => setNotifications((items) => items.map((item) => ({ ...item, unread: false })))}>Mark all read</button></div>{notifications.map((item) => <button className={`notification-item ${item.unread ? 'notification-item--unread' : ''}`} key={item.id} type="button" onClick={() => setNotifications((items) => items.map((entry) => entry.id === item.id ? { ...entry, unread: false } : entry))}><span className="notification-item__mark" /><span><strong>{item.title}</strong><p>{item.text}</p><small>{item.time}</small></span></button>)}</div>}</div><div className="topbar__avatar">{initials}</div></div>
+          <div className="topbar__actions"><div className="notification-wrap"><button className="notification-button" type="button" aria-label={`${notifications.filter((item) => item.unread).length} unread notifications`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Icon name="bell" />{notifications.some((item) => item.unread) && <span />}</button>{notificationsOpen && <div className="notification-panel" role="dialog" aria-label="Notifications"><div className="notification-heading"><strong>Notifications</strong><button type="button" disabled={!notifications.some((item) => item.unread)} onClick={() => void markAllNotificationsRead().catch((caught: unknown) => setOrderError(caught instanceof Error ? caught.message : 'Notifications could not be marked as read.'))}>Mark all read</button></div>{notifications.length ? notifications.map((item) => <button className={`notification-item ${item.unread ? 'notification-item--unread' : ''}`} key={item.id} type="button" onClick={() => { if (item.unread) void markNotificationRead(item.id).catch((caught: unknown) => setOrderError(caught instanceof Error ? caught.message : 'Notification could not be marked as read.')); }}><span className="notification-item__mark" /><span><strong>{item.title}</strong><p>{item.text}</p><small>{item.time}</small></span></button>) : <p className="notification-empty">No notifications yet.</p>}</div>}</div><div className="topbar__avatar">{initials}</div></div>
         </header>
 
         <main className="content">
-          {view === 'dashboard' && <Dashboard goTo={goTo} apiState={apiState} customerOrders={customerOrders} customerName={customerName.split(/\s+/)[0]} />}
+          {orderError && <p className="flow-error" role="alert">{orderError}</p>}
+          {orderNotice && <p className="profile-saved" role="status">{orderNotice}</p>}
+          {view === 'dashboard' && <Dashboard goTo={goTo} apiState={apiState} customerOrders={customerOrders} customerName={customerName.split(/\s+/)[0]} onConfirmDelivery={confirmDelivery} />}
           {view === 'print' && <PrintRequestFlow
             addresses={addresses}
             onDocumentSaved={(document: SavedDocument) => setDocuments((items) => [document, ...items.filter((item) => item.id !== document.id)])}
             onOrderPlaced={(order: PrintOrderSummary) => {
-              const nextOrder: Order = { id: order.reference, type: 'Print & Deliver', detail: order.shopName, status: order.status, tone: 'blue', date: new Date().toLocaleDateString() };
+              const nextOrder: Order = { id: order.reference, backendId: order.id, type: 'Print & Deliver', detail: order.shopName, status: order.status, tone: 'blue', date: new Date().toLocaleDateString() };
               setCustomerOrders((items) => [nextOrder, ...items.filter((item) => item.id !== nextOrder.id)]);
               setSupportOrders((items) => [{ id: order.id, reference: order.reference }, ...items.filter((item) => item.id !== order.id)]);
               goTo('orders');
@@ -220,25 +284,26 @@ export default function CustomerDashboardPage() {
           />}
           {view === 'attest' && <AttestationRequestFlow
             onBooked={(booking: AttestationBookingResult) => {
-              const nextOrder: Order = { id: booking.reference, type: 'Attest & Return', detail: booking.agent.businessName, status: booking.status, tone: 'green', date: new Date().toLocaleDateString() };
+              const nextOrder: Order = { id: booking.reference, backendId: booking.id, type: 'Attest & Return', detail: booking.agent.businessName, status: booking.status, tone: 'green', date: new Date().toLocaleDateString() };
               setCustomerOrders((items) => [nextOrder, ...items.filter((item) => item.id !== nextOrder.id)]);
             }}
             onViewOrders={() => goTo('orders')}
             onBack={() => goTo('dashboard')}
           />}
-          {view === 'orders' && <SimplePage title="My orders" description="Every request, handover and delivery in one place.">{customerOrders.length ? <div className="panel">{customerOrders.map((order) => <OrderRow key={order.id} order={order} />)}</div> : <EmptyState title="No orders yet" text="Your active and completed requests will appear here." action="Start a request" onAction={() => goTo('print')} />}</SimplePage>}
+          {view === 'orders' && <SimplePage title="My orders" description="Every request, handover and delivery in one place.">{customerOrders.length ? <div className="panel">{customerOrders.map((order) => <OrderRow key={order.id} order={order} onConfirmDelivery={confirmDelivery} />)}</div> : <EmptyState title="No orders yet" text="Your active and completed requests will appear here." action="Start a request" onAction={() => goTo('print')} />}</SimplePage>}
           {view === 'documents' && <DocumentLibrary documents={documents} onChanged={setDocuments} onStartPrint={() => goTo('print')} />}
           {view === 'addresses' && <AddressPage addresses={addresses} onChanged={setAddresses} />}
+          {view === 'payments' && <PaymentsPage orders={customerOrders.filter((order) => order.type === 'Print & Deliver')} />}
           {view === 'support' && <CustomerSupportPage orders={supportOrders} />}
           {view === 'profile' && <ProfilePage session={session} onSave={saveProfile} onLogout={() => { window.localStorage.removeItem('print-attest-session'); window.location.href = '/login'; }} />}
-          {view !== 'dashboard' && view !== 'print' && view !== 'attest' && view !== 'orders' && view !== 'documents' && view !== 'addresses' && view !== 'support' && view !== 'profile' && <SimplePage title={currentLabel} description="This workspace is ready for your account details."><div className="empty-panel"><span className="empty-panel__icon"><Icon name={navigation.find((item) => item.id === view)?.icon ?? 'user'} /></span><h3>Nothing to show yet</h3><p>Connect your customer account to manage this area securely.</p><button className="button button--secondary" type="button" onClick={() => goTo('support')}>Contact support <Icon name="arrow" /></button></div></SimplePage>}
+          {view !== 'dashboard' && view !== 'print' && view !== 'attest' && view !== 'orders' && view !== 'documents' && view !== 'addresses' && view !== 'payments' && view !== 'support' && view !== 'profile' && <SimplePage title={currentLabel} description="This workspace is ready for your account details."><div className="empty-panel"><span className="empty-panel__icon"><Icon name={navigation.find((item) => item.id === view)?.icon ?? 'user'} /></span><h3>Nothing to show yet</h3><p>Connect your customer account to manage this area securely.</p><button className="button button--secondary" type="button" onClick={() => goTo('support')}>Contact support <Icon name="arrow" /></button></div></SimplePage>}
         </main>
       </div>
     </div>
   );
 }
 
-function Dashboard({ goTo, apiState, customerOrders, customerName }: { goTo: (view: View) => void; apiState: 'loading' | 'connected' | 'unavailable'; customerOrders: Order[]; customerName: string }) {
+function Dashboard({ goTo, apiState, customerOrders, customerName, onConfirmDelivery }: { goTo: (view: View) => void; apiState: 'loading' | 'connected' | 'unavailable'; customerOrders: Order[]; customerName: string; onConfirmDelivery: (order: Order) => void }) {
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   useEffect(() => setCurrentTime(new Date()), []);
   const currentHour = currentTime?.getHours();
@@ -250,9 +315,16 @@ function Dashboard({ goTo, apiState, customerOrders, customerName }: { goTo: (vi
       {apiState === 'unavailable' && <div className="system-notice"><span className="system-notice__dot" /><div><strong>Workspace connection is unavailable</strong><p>Live orders and account data will appear when the API is running. Your document files are not sent anywhere from this screen.</p></div></div>}
       {apiState === 'connected' && <div className="system-notice system-notice--success"><span className="system-notice__dot" /><div><strong>Workspace connected</strong><p>Live account data is ready to load from the customer API.</p></div></div>}
       <section className="services"><div className="section-heading"><div><p className="section-label">Services</p><h2>Make progress in a few steps.</h2></div><span className="section-note">Secure by design</span></div><div className="service-grid"><ServiceCard type="print" title="Print & Deliver" description="Upload your files, choose your finish and get them delivered from a nearby print shop." action={() => goTo('print')} /><ServiceCard type="attest" title="Attest & Return" description="Send originals through a verified process and track them safely back to your door." action={() => goTo('attest')} /></div></section>
-      <section className="orders-section"><div className="section-heading"><div><p className="section-label">In progress</p><h2>Keep an eye on your orders.</h2></div><button className="text-button text-button--muted" type="button" onClick={() => goTo('orders')}>View all <Icon name="arrow" /></button></div>{customerOrders.length ? <div className="panel">{customerOrders.map((order) => <OrderRow key={order.id} order={order} />)}</div> : <div className="panel empty-orders"><span className="empty-orders__icon"><Icon name="orders" /></span><span><strong>No active orders</strong><small>Start a request when you are ready.</small></span><button className="text-button" type="button" onClick={() => goTo('print')}>Get started <Icon name="arrow" /></button></div>}</section>
+      <section className="orders-section"><div className="section-heading"><div><p className="section-label">In progress</p><h2>Keep an eye on your orders.</h2></div><button className="text-button text-button--muted" type="button" onClick={() => goTo('orders')}>View all <Icon name="arrow" /></button></div>{customerOrders.length ? <div className="panel">{customerOrders.map((order) => <OrderRow key={order.id} order={order} onConfirmDelivery={onConfirmDelivery} />)}</div> : <div className="panel empty-orders"><span className="empty-orders__icon"><Icon name="orders" /></span><span><strong>No active orders</strong><small>Start a request when you are ready.</small></span><button className="text-button" type="button" onClick={() => goTo('print')}>Get started <Icon name="arrow" /></button></div>}</section>
     </>
   );
+}
+
+function PaymentsPage({ orders }: { orders: Order[] }) {
+  const payments = orders.filter((order) => order.payment);
+  return <section className="simple-page"><h1>Payments</h1><p className="simple-page__description">Payment records attached to your print orders.</p>
+    {payments.length ? <div className="customer-payment-list">{payments.map((order) => <article className="customer-payment-row" key={order.backendId ?? order.id}><div><strong>{order.id}</strong><span>{order.type} · {order.payment?.method.replaceAll('_', ' ')}</span></div><div><strong>{order.payment?.currency} {Number(order.payment?.amount).toFixed(2)}</strong><span className={`customer-payment-status customer-payment-status--${order.payment?.status.toLowerCase()}`}>{order.payment?.status.replaceAll('_', ' ')}</span></div></article>)}</div> : <div className="panel empty-panel"><span className="empty-panel__icon"><Icon name="card" /></span><h3>No payment records yet</h3><p>Payment details will appear here when the platform records a payment for one of your orders. This page does not initiate or confirm external payments.</p></div>}
+  </section>;
 }
 
 function RequestPage({ type, uploadedFile, onFileChange, onClear, goTo }: { type: 'print' | 'attest'; uploadedFile: string | null; onFileChange: (event: ChangeEvent<HTMLInputElement>) => void; onClear: () => void; goTo: (view: View) => void }) {
@@ -453,5 +525,5 @@ function ProfilePage({ session, onSave, onLogout }: { session: { name: string; e
       setSaving(false);
     }
   };
-  return <section className="simple-page"><p className="section-label">Account</p><h1>My profile</h1><p className="simple-page__description">Keep your contact details current so riders and support can reach you.</p><div className="profile-layout"><div className="panel profile-form"><div className="profile-heading"><span className="profile-large-avatar">{form.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'AM'}</span><div><h2>{form.name || 'Your profile'}</h2><p>Customer account</p></div></div><label className="field-label">Full name<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label className="field-label">Phone number<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><label className="field-label">Email address<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="name@example.com" /></label>{saveError && <p className="flow-error" role="alert">{saveError}</p>}{saved && <p className="profile-saved" role="status">Profile saved.</p>}<div className="form-actions"><button className="button button--primary" type="button" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save changes'}</button><button className="button button--quiet" type="button" onClick={onLogout}>Log out</button></div></div><aside className="profile-security panel"><span className="trust-note__icon"><Icon name="shield" /></span><h3>Account security</h3><p>Phone verification protects access to your orders and private documents.</p><button className="text-button text-button--muted" type="button">Manage verification <Icon name="arrow" /></button></aside></div></section>;
+  return <section className="simple-page"><p className="section-label">Account</p><h1>My profile</h1><p className="simple-page__description">Keep your contact details current so riders and support can reach you.</p><div className="profile-layout"><div className="panel profile-form"><div className="profile-heading"><span className="profile-large-avatar">{form.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'C'}</span><div><h2>{form.name || 'Your profile'}</h2><p>Customer account</p></div></div><label className="field-label">Full name<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label className="field-label">Phone number<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><label className="field-label">Email address<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="name@example.com" /></label>{saveError && <p className="flow-error" role="alert">{saveError}</p>}{saved && <p className="profile-saved" role="status">Profile saved.</p>}<div className="form-actions"><button className="button button--primary" type="button" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save changes'}</button><button className="button button--quiet" type="button" onClick={onLogout}>Log out</button></div></div><aside className="profile-security panel"><span className="trust-note__icon"><Icon name="shield" /></span><h3>Account security</h3><p>Phone verification is unavailable until an SMS provider is configured.</p></aside></div></section>;
 }

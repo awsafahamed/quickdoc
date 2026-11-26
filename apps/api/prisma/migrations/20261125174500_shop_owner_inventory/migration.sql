@@ -1,4 +1,4 @@
-CREATE TABLE "ShopInventoryItem" (
+CREATE TABLE IF NOT EXISTS "ShopInventoryItem" (
   "id" UUID NOT NULL,
   "shopId" UUID NOT NULL,
   "name" VARCHAR(120) NOT NULL,
@@ -14,8 +14,8 @@ CREATE TABLE "ShopInventoryItem" (
     ON DELETE CASCADE ON UPDATE CASCADE
 );
 
-CREATE INDEX "ShopInventoryItem_shopId_updatedAt_idx"
+CREATE INDEX IF NOT EXISTS "ShopInventoryItem_shopId_updatedAt_idx"
   ON "ShopInventoryItem"("shopId", "updatedAt");
 
 ALTER TABLE "ShopOpeningHour"
-  ADD COLUMN "isClosed" BOOLEAN NOT NULL DEFAULT false;
+  ADD COLUMN IF NOT EXISTS "isClosed" BOOLEAN NOT NULL DEFAULT false;

@@ -6,10 +6,12 @@ import { ShopPortalController } from './shop-portal.controller';
 import { ShopPortalOperationsController } from './shop-portal-operations.controller';
 import { AdminGuard } from '../auth/admin.guard';
 import { StorageModule } from '../storage/storage.module';
+import { SupportModule } from '../support/support.module';
+import { ShopSupportController } from './shop-support.controller';
 
 @Module({
-  imports: [StorageModule],
-  controllers: [ShopsController, ShopsAdminController, ShopPortalController, ShopPortalOperationsController],
+  imports: [StorageModule, SupportModule],
+  controllers: [ShopsController, ShopsAdminController, ShopPortalController, ShopPortalOperationsController, ShopSupportController],
   providers: [ShopsService, AdminGuard],
   exports: [ShopsService],
 })

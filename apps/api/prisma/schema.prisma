@@ -203,6 +203,7 @@ model Order {
   clientKey            String?                @db.Uuid
   checkoutFingerprint  String?
   DeliveryAssignment   DeliveryAssignment?
+  DeliveryOffer        DeliveryOffer[]
   FinancialLedgerEntry FinancialLedgerEntry[]
   customer             User                   @relation(fields: [customerId], references: [id])
   Shop                 Shop                   @relation(fields: [shopId], references: [id])
@@ -312,6 +313,22 @@ model DeliveryStatusHistory {
   DeliveryAssignment DeliveryAssignment @relation(fields: [assignmentId], references: [id])
 
   @@index([assignmentId, createdAt])
+}
+
+model DeliveryOffer {
+  id             String        @id @db.Uuid
+  orderId        String        @db.Uuid
+  riderId        String        @db.Uuid
+  distanceKm     Decimal       @db.Decimal(6, 2)
+  earnings       Decimal       @db.Decimal(12, 2)
+  status         String        @default("PENDING")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime
+  Order          Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  RiderProfile   RiderProfile  @relation(fields: [riderId], references: [userId], onDelete: Cascade)
+
+  @@index([orderId, status])
+  @@index([riderId, status, createdAt])
 }
 
 model Document {
@@ -507,6 +524,7 @@ model RiderProfile {
   createdAt          DateTime             @default(now())
   updatedAt          DateTime
   DeliveryAssignment DeliveryAssignment[]
+  DeliveryOffer      DeliveryOffer[]
   RiderAvailability  RiderAvailability?
   User               User                 @relation(fields: [userId], references: [id])
   Settlement         Settlement[]
@@ -569,6 +587,7 @@ enum OrderStatus {
   PICKED_UP
   OUT_FOR_DELIVERY
   DELIVERED
+  COMPLETED
   CANCELLED
   DELIVERY_FAILED
 }
