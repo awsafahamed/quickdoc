@@ -28,6 +28,18 @@ type RiderNotification = { id: string; title: string; body: string; readAt: stri
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1').replace(/\/+$/, '');
 
+async function riderResponseError(response: Response, fallback: string) {
+  try {
+    const body = await response.json() as { message?: string | string[]; error?: string };
+    const detail = body.message ?? body.error;
+    if (Array.isArray(detail)) return detail.join('. ');
+    if (typeof detail === 'string' && detail.trim()) return detail;
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
 async function riderRequest<T>(path: string, options: RequestInit & { bodyData?: unknown } = {}): Promise<T> {
   const token = window.sessionStorage.getItem('rider-access-token');
   if (!token) throw new Error('Your rider session has expired. Sign in again.');
@@ -114,8 +126,7 @@ export default function RiderPortal() {
       setCheckingSession(false);
       return;
     }
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
-    fetch(`${apiUrl}/riders/me`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${API_URL}/riders/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (response) => {
         if (!response.ok) throw new Error('Rider session could not be verified.');
         return response.json() as Promise<{ data: RiderProfile }>;
@@ -275,7 +286,7 @@ export default function RiderPortal() {
 }
 
 function RiderRegistration({ initialError, onRegistered }: { initialError: string; onRegistered: (profile: RiderProfile) => void }) {
-  const [mode, setMode] = useState<'register' | 'login'>('register');
+  const [mode, setMode] = useState<'register' | 'login' | 'complete'>('register');
   const [phone, setPhone] = useState('+94');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -283,57 +294,161 @@ function RiderRegistration({ initialError, onRegistered }: { initialError: strin
   const [vehicle, setVehicle] = useState('BIKE');
   const [error, setError] = useState(initialError);
   const [submitting, setSubmitting] = useState(false);
+  const [pendingSession, setPendingSession] = useState<{ accessToken: string; refreshToken: string } | null>(null);
 
   useEffect(() => setError(initialError), [initialError]);
+
+  const saveRiderProfile = async (session: { accessToken: string; refreshToken: string }) => {
+    const response = await fetch(`${API_URL}/riders/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.accessToken}`,
+      },
+      body: JSON.stringify({ phone: phone.trim(), vehicleType: vehicle }),
+    });
+    if (!response.ok) {
+      throw new Error(await riderResponseError(response, 'The rider application could not be saved.'));
+    }
+    const result = await response.json() as { data: RiderProfile };
+    window.sessionStorage.setItem('rider-access-token', session.accessToken);
+    window.localStorage.setItem('rider-refresh-token', session.refreshToken);
+    setPendingSession(null);
+    onRegistered(result.data);
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError('');
+    if (mode === 'complete') {
+      if (!pendingSession) {
+        setMode('login');
+        setError('Sign in again to finish your rider application.');
+        return;
+      }
+      if (!/^\+94[0-9]{9}$/.test(phone)) {
+        setError('Enter a valid Sri Lanka mobile number.');
+        return;
+      }
+      setSubmitting(true);
+      try {
+        await saveRiderProfile(pendingSession);
+      } catch (caught) {
+        setError(caught instanceof TypeError
+          ? 'Could not reach QuickDoc. Check your connection and try again.'
+          : caught instanceof Error ? caught.message : 'The rider application could not be saved.');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+    if (!password) {
+      setError('Enter your password.');
+      return;
+    }
+    if (mode === 'register' && password.length < 8) {
+      setError('Choose a password with at least 8 characters.');
+      return;
+    }
+    if (mode === 'register' && !name.trim()) {
+      setError('Enter your full name.');
+      return;
+    }
+    if (mode === 'register' && !/^\+94[0-9]{9}$/.test(phone)) {
+      setError('Enter a valid Sri Lanka mobile number.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (mode === 'login') {
+        const response = await fetch(`${API_URL}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim(), password }),
+        });
+        if (!response.ok) {
+          const message = response.status === 401
+            ? 'Email or password is incorrect.'
+            : await riderResponseError(response, 'Sign-in could not be completed.');
+          throw new Error(message);
+        }
+        const result = await response.json() as {
+          data: { accessToken: string; refreshToken: string; user: { roles: string[] } };
+        };
+        if (!result.data.user.roles.includes('RIDER')) {
+          throw new Error('This account does not have a rider profile. Create a rider account to apply.');
+        }
+        const profileResponse = await fetch(`${API_URL}/riders/me`, {
+          headers: { Authorization: `Bearer ${result.data.accessToken}` },
+        });
+        if (profileResponse.status === 404) {
+          setPendingSession(result.data);
+          setMode('complete');
+          setError('Your account is signed in, but the rider application is incomplete. Add your details below to continue.');
+          return;
+        }
+        if (!profileResponse.ok) {
+          throw new Error(await riderResponseError(profileResponse, 'Your rider profile could not be verified.'));
+        }
+        const profileResult = await profileResponse.json() as { data: RiderProfile };
+        window.sessionStorage.setItem('rider-access-token', result.data.accessToken);
+        window.localStorage.setItem('rider-refresh-token', result.data.refreshToken);
+        onRegistered(profileResult.data);
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/auth/register/rider`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), password, phone: phone.trim() }),
+      });
+      if (!response.ok) {
+        throw new Error(await riderResponseError(response, 'Registration could not be completed.'));
+      }
+      const result = await response.json() as { data: { accessToken: string; refreshToken: string } };
+      setPendingSession(result.data);
+      try {
+        await saveRiderProfile(result.data);
+      } catch (caught) {
+        setMode('complete');
+        const detail = caught instanceof Error
+          ? caught.message
+          : 'The rider application could not be saved.';
+        throw new Error(`Your account was created, but the rider application could not be saved: ${detail}`);
+      }
+    } catch (caught) {
+      setError(caught instanceof TypeError
+        ? 'Could not reach QuickDoc. Check your connection and try again.'
+        : caught instanceof Error ? caught.message : 'The rider account could not be verified.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <main className="rider-registration">
       <section className="rider-registration-copy"><span className="registration-mark">P</span><p>RIDER PORTAL</p><h1>Make every delivery count.</h1><p>Complete verification to receive print and attestation delivery requests.</p></section>
-      <section className="rider-registration-panel"><div className="rider-auth-tabs"><button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); }}>Create account</button><button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); }}>Log in</button></div><p className="step-label">{mode === 'register' ? 'Rider registration' : 'Rider account access'}</p><h2>{mode === 'register' ? 'Create your rider account' : 'Welcome back'}</h2><form onSubmit={async (event) => {
-        event.preventDefault();
-        if (!password) { setError('Enter your password.'); return; }
-        if (mode === 'register' && !/^\+94[0-9]{9}$/.test(phone)) { setError('Enter a valid Sri Lanka mobile number.'); return; }
-        setSubmitting(true);
-        setError('');
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
-        try {
-          if (mode === 'login') {
-            const response = await fetch(`${apiUrl}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), password }) });
-            if (!response.ok) { setError(response.status === 401 ? 'Email or password is incorrect.' : 'Sign-in service is unavailable. Please try again.'); return; }
-            const result = await response.json() as { data: { accessToken: string; refreshToken: string; user: { roles: string[] } } };
-            if (!result.data.user.roles.includes('RIDER')) { setError('This account does not have a rider profile. Create a rider account to apply.'); return; }
-            const profileResponse = await fetch(`${apiUrl}/riders/me`, { headers: { Authorization: `Bearer ${result.data.accessToken}` } });
-            if (!profileResponse.ok) { setError(profileResponse.status === 404 ? 'Complete your rider application before signing in.' : 'Your rider profile could not be verified. Please try again.'); return; }
-            const profileResult = await profileResponse.json() as { data: RiderProfile };
-            window.sessionStorage.setItem('rider-access-token', result.data.accessToken);
-            window.localStorage.setItem('rider-refresh-token', result.data.refreshToken);
-            onRegistered(profileResult.data);
-            return;
-          }
-          if (!name.trim()) { setError('Enter your full name.'); return; }
-          const response = await fetch(`${apiUrl}/auth/register/rider`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), email: email.trim(), password, phone: phone.trim() }) });
-          if (!response.ok) { setError(response.status === 409 ? 'This email is already in use.' : 'Registration service is unavailable. Please try again.'); return; }
-          const result = await response.json() as { data: { accessToken: string; refreshToken: string } };
-          const profileResponse = await fetch(`${apiUrl}/riders/register`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${result.data.accessToken}` }, body: JSON.stringify({ phone: phone.trim(), vehicleType: vehicle }) });
-          if (!profileResponse.ok) { setError('Your account was created, but the rider application could not be saved. Please sign in and retry.'); return; }
-          const profileResult = await profileResponse.json() as { data: RiderProfile };
-          window.sessionStorage.setItem('rider-access-token', result.data.accessToken);
-          window.localStorage.setItem('rider-refresh-token', result.data.refreshToken);
-          onRegistered(profileResult.data);
-        } catch (caught) {
-          setError(caught instanceof TypeError ? 'The rider service is unavailable. Please try again.' : 'The rider account could not be verified. Please try again.');
-        } finally {
-          setSubmitting(false);
-        }
-      }}>
-        {mode === 'register' && <label>Full name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Your full name" /></label>}
-        <label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="rider@quickdoc.lk" /></label>
-        <label>Password<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" /></label>
-        {mode === 'register' && <><label>Phone number<div className="phone-field"><span>🇱🇰 +94</span><input required value={phone.replace('+94', '')} onChange={(event) => setPhone('+94' + event.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="70 123 4567" /></div></label><label>Vehicle tier<select value={vehicle} onChange={(event) => setVehicle(event.target.value)}><option value="BIKE">Flash Bike</option><option value="TUK">Flash Tuk</option><option value="CAR">Flash XL Car</option></select></label></>}
-        {error && <p className="registration-error" role="alert">{error}</p>}
-        <button type="submit" disabled={submitting}>{submitting ? 'Please wait…' : mode === 'register' ? 'Create rider account' : 'Sign in'}</button>
-        <p className="registration-note">Applications require review before a rider can go online or receive work.</p>
-      </form></section>
+      <section className="rider-registration-panel">
+        {mode !== 'complete' && <div className="rider-auth-tabs">
+          <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); }}>Create account</button>
+          <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); }}>Log in</button>
+        </div>}
+        <p className="step-label">{mode === 'register' ? 'Rider registration' : mode === 'complete' ? 'Finish rider application' : 'Rider account access'}</p>
+        <h2>{mode === 'register' ? 'Create your rider account' : mode === 'complete' ? 'Complete your application' : 'Welcome back'}</h2>
+        {mode === 'complete' && <p className="registration-note">Your account is signed in. Add the rider details below to continue.</p>}
+        <form onSubmit={(event) => void submit(event)}>
+          {mode === 'register' && <label>Full name<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your full name" /></label>}
+          {mode !== 'complete' && <label>Email address<input type="email" autoComplete="email" maxLength={254} required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="rider@quickdoc.lk" /></label>}
+          {mode !== 'complete' && <label>Password<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={mode === 'register' ? 8 : undefined} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'register' ? 'At least 8 characters' : 'Your password'} /></label>}
+          {mode === 'complete' && <p>Signed in as <strong>{email}</strong></p>}
+          {(mode === 'register' || mode === 'complete') && <><label>Phone number<div className="phone-field"><span>🇱🇰 +94</span><input type="tel" autoComplete="tel" required value={phone.replace(/^\+94/, '')} onChange={(event) => setPhone('+94' + event.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="70 123 4567" /></div></label><label>Vehicle tier<select value={vehicle} onChange={(event) => setVehicle(event.target.value)}><option value="BIKE">Flash Bike</option><option value="TUK">Flash Tuk</option><option value="CAR">Flash XL Car</option></select></label></>}
+          {error && <p className="registration-error" role="alert">{error}</p>}
+          <button type="submit" disabled={submitting}>{submitting ? 'Please wait…' : mode === 'register' ? 'Create rider account' : mode === 'complete' ? 'Save rider application' : 'Sign in'}</button>
+          {mode !== 'complete' && <p className="registration-note">Applications require review before a rider can go online or receive work.</p>}
+        </form>
+        {mode === 'complete' && <button className="rider-auth-back" type="button" onClick={() => { setPendingSession(null); setMode('login'); setError(''); }}>Back to sign in</button>}
+      </section>
     </main>
   );
 }

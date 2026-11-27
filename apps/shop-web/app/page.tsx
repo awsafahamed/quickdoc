@@ -151,11 +151,19 @@ async function api<T>(path: string, options: RequestInit & { json?: unknown } = 
   const token = window.sessionStorage.getItem('shop-access-token');
   if (token) headers.set('Authorization', `Bearer ${token}`);
   if (options.json !== undefined) headers.set('Content-Type', 'application/json');
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers,
-    body: options.json === undefined ? options.body : JSON.stringify(options.json),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers,
+      body: options.json === undefined ? options.body : JSON.stringify(options.json),
+    });
+  } catch (reason) {
+    if (reason instanceof TypeError) {
+      throw new Error('Could not reach QuickDoc. Check your connection and try again.');
+    }
+    throw reason;
+  }
   if (!response.ok) {
     let message = `Request failed (${response.status})`;
     try {
@@ -239,6 +247,7 @@ function Icon({ name, size = 19 }: { name: string; size?: number }) {
 export default function ShopPortal() {
   const [auth, setAuth] = useState<'checking' | 'anonymous' | 'setup' | 'ready'>('checking');
   const [shop, setShop] = useState<ShopProfile | null>(null);
+  const [authError, setAuthError] = useState('');
   useEffect(() => {
     const token = window.sessionStorage.getItem('shop-access-token');
     if (!token) { setAuth('anonymous'); return; }
@@ -248,7 +257,10 @@ export default function ShopPortal() {
         const session = await api<Envelope<{ roles: string[] }>>('/auth/session');
         if (!session.data.roles.includes('SHOP_OWNER')) {
           window.sessionStorage.removeItem('shop-access-token');
-          if (active) setAuth('anonymous');
+          if (active) {
+            setAuthError('This account does not have shop-owner access.');
+            setAuth('anonymous');
+          }
           return;
         }
         try {
@@ -261,21 +273,24 @@ export default function ShopPortal() {
           }
           throw reason;
         }
-      } catch {
+      } catch (reason) {
         window.sessionStorage.removeItem('shop-access-token');
-        if (active) setAuth('anonymous');
+        if (active) {
+          setAuthError(reason instanceof Error ? reason.message : 'Could not verify your shop session. Sign in again.');
+          setAuth('anonymous');
+        }
       }
     };
     void restore();
     return () => { active = false; };
   }, []);
   if (auth === 'checking') return <main className="auth-loading"><div className="skeleton skeleton--title" /><div className="skeleton skeleton--line" /><div className="skeleton skeleton--line short" /></main>;
-  if (auth === 'anonymous' || auth === 'setup') return <RegistrationPage initialMode={auth === 'setup' ? 'setup' : 'login'} onReady={(profile) => { setShop(profile); setAuth('ready'); }} />;
+  if (auth === 'anonymous' || auth === 'setup') return <RegistrationPage initialMode={auth === 'setup' ? 'setup' : 'login'} initialError={authError} onReady={(profile) => { setShop(profile); setAuthError(''); setAuth('ready'); }} />;
   if (!shop) return <main className="error-screen"><h1>Shop profile unavailable</h1><p>We could not load your shop details. Sign in again to continue.</p><button className="button button--primary" onClick={() => setAuth('anonymous')}>Return to sign in</button></main>;
-  return <PortalWorkspace initialShop={shop} onSignOut={() => { window.sessionStorage.removeItem('shop-access-token'); window.localStorage.removeItem('shop-refresh-token'); window.localStorage.removeItem('print-shop-registered'); setAuth('anonymous'); }} />;
+  return <PortalWorkspace initialShop={shop} onSignOut={() => { window.sessionStorage.removeItem('shop-access-token'); window.localStorage.removeItem('shop-refresh-token'); window.localStorage.removeItem('print-shop-registered'); setAuthError(''); setAuth('anonymous'); }} />;
 }
 
-function RegistrationPage({ onReady, initialMode = 'login' }: { onReady: (profile: ShopProfile) => void; initialMode?: 'login' | 'setup' }) {
+function RegistrationPage({ onReady, initialMode = 'login', initialError = '' }: { onReady: (profile: ShopProfile) => void; initialMode?: 'login' | 'setup'; initialError?: string }) {
   const [mode, setMode] = useState<'register' | 'login' | 'setup' | 'forgot'>(initialMode);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('+94');
@@ -284,7 +299,7 @@ function RegistrationPage({ onReady, initialMode = 'login' }: { onReady: (profil
   const [address, setAddress] = useState('');
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialError);
   const [message, setMessage] = useState('');
   const [locationError, setLocationError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -375,8 +390,8 @@ function RegistrationPage({ onReady, initialMode = 'login' }: { onReady: (profil
       <h2>{mode === 'login' ? 'Welcome back' : mode === 'forgot' ? 'Reset your password' : mode === 'setup' ? 'Finish shop setup' : 'Set up your shop'}</h2><p className="auth-subtitle">{mode === 'login' ? 'Sign in to pick up where you left off.' : mode === 'forgot' ? 'We will email a secure reset link if this account exists.' : mode === 'setup' ? 'Your account is signed in. Add the shop details needed to use the workspace.' : 'Start with your business details. New shops are reviewed before they can accept orders.'}</p>
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
         {(mode === 'register' || mode === 'setup') && <><label>Business name<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your print shop" autoComplete="organization" /></label><label>Business phone<input required minLength={7} maxLength={20} value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" /></label><label>Shop address<input required minLength={5} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street, building and city" autoComplete="street-address" /></label><div className="location-fields"><button className="button button--secondary" type="button" onClick={useCurrentLocation}>Use current location</button><label>Latitude<input required type="number" step="any" min="-90" max="90" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="6.9271" /></label><label>Longitude<input required type="number" step="any" min="-180" max="180" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="79.8612" /></label></div>{locationError && <p className="form-error" role="alert">{locationError}</p>}</>}
-        {(mode === 'login' || mode === 'register' || mode === 'forgot') && <label>Business email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@business.com" /></label>}
-        {(mode === 'login' || mode === 'register') && <label>Password<input required type="password" minLength={8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" /></label>}
+        {(mode === 'login' || mode === 'register' || mode === 'forgot') && <label>Business email<input required type="email" maxLength={254} autoComplete="email" value={email} onChange={(event) => { setEmail(event.target.value); setError(''); }} placeholder="you@business.com" /></label>}
+        {(mode === 'login' || mode === 'register') && <label>Password<input required type="password" minLength={mode === 'register' ? 8 : undefined} maxLength={128} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => { setPassword(event.target.value); setError(''); }} placeholder={mode === 'register' ? 'At least 8 characters' : 'Your password'} /></label>}
         {error && <p className="form-error" role="alert">{error}</p>}
         {message && <p className="success-message" role="status">{message}</p>}
         <button className="button button--primary button--wide" disabled={busy} type="submit">{busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : mode === 'forgot' ? 'Send reset link' : mode === 'setup' ? 'Save shop details' : 'Create account'}</button>

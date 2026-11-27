@@ -76,8 +76,9 @@ export interface AgentNotification {
   createdAt: string;
 }
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+const API_BASE_URL = (
+  process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1'
+).replace(/\/+$/, '');
 const SESSION_KEY = 'quickdoc-agent-session';
 
 function readSession(): AgentSession | null {
@@ -136,7 +137,14 @@ async function send(
   const headers = new Headers(init.headers);
   if (init.body) headers.set('Content-Type', 'application/json');
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-  return fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+  try {
+    return await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+  } catch (reason) {
+    if (reason instanceof TypeError) {
+      throw new Error('Could not reach QuickDoc. Check your connection and try again.');
+    }
+    throw reason;
+  }
 }
 
 export async function apiRequest<T>(

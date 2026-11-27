@@ -4,7 +4,7 @@ const API_BASE = (
   process.env.API_URL ??
   process.env.NEXT_PUBLIC_API_URL ??
   'http://localhost:3001/api/v1'
-).replace(/\/$/, '');
+).replace(/\/+$/, '');
 const ACCESS_COOKIE = 'quickdoc_admin_access';
 const REFRESH_COOKIE = 'quickdoc_admin_refresh';
 const REFRESH_MAX_AGE = 30 * 24 * 60 * 60;

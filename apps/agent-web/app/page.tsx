@@ -288,7 +288,7 @@ export default function AgentPortal() {
 
   if (booting) return <LoadingScreen />;
   if (!session) {
-    return <AuthScreen busy={busy} error={error} onSignIn={signIn} onRegister={register} />;
+    return <AuthScreen busy={busy} error={error} onSignIn={signIn} onRegister={register} onClearError={() => setError('')} />;
   }
   if (!profile) {
     return <AgentProfileSetup busy={busy} error={error} onSave={saveAgentProfile} onSignOut={signOut} />;
@@ -360,11 +360,12 @@ function LoadingScreen() {
   return <main className="loading-screen" aria-live="polite"><img src="/logo/quickdoc-logo.svg" alt="QuickDoc" /><span className="loading-indicator" />Loading your workspace</main>;
 }
 
-function AuthScreen({ busy, error, onSignIn, onRegister }: {
+function AuthScreen({ busy, error, onSignIn, onRegister, onClearError }: {
   busy: boolean;
   error: string;
   onSignIn: (values: AuthValues) => Promise<void>;
   onRegister: (values: AuthValues) => Promise<void>;
+  onClearError: () => void;
 }) {
   const [mode, setMode] = useState<'signin' | 'register'>('signin');
   const [name, setName] = useState('');
@@ -387,12 +388,12 @@ function AuthScreen({ busy, error, onSignIn, onRegister }: {
           <div className="auth-heading"><span className="auth-overline">Agent workspace</span><h2>{mode === 'signin' ? 'Welcome back' : 'Create your agent account'}</h2><p>{mode === 'signin' ? 'Sign in to manage your attestation work.' : 'Start with your account details. Your business profile is submitted next.'}</p></div>
           <form onSubmit={submit}>
             {mode === 'register' && <label>Your name<input autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} minLength={2} maxLength={120} required /></label>}
-            <label>Email address<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-            <label>Password<input type="password" autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} maxLength={128} required /></label>
+            <label>Email address<input type="email" autoComplete="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
+            <label>Password<input type="password" autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} minLength={mode === 'register' ? 8 : undefined} maxLength={128} required /></label>
             {error && <p className="form-error" role="alert">{error}</p>}
             <button className="primary-action auth-submit" type="submit" disabled={busy}>{busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : 'Create account'}<Icon name="arrow" /></button>
           </form>
-          <p className="auth-switch">{mode === 'signin' ? 'New to QuickDoc?' : 'Already have an account?'} <button type="button" onClick={() => { setMode(mode === 'signin' ? 'register' : 'signin'); }}>{mode === 'signin' ? 'Create an agent account' : 'Sign in'}</button></p>
+          <p className="auth-switch">{mode === 'signin' ? 'New to QuickDoc?' : 'Already have an account?'} <button type="button" onClick={() => { setMode(mode === 'signin' ? 'register' : 'signin'); onClearError(); }}>{mode === 'signin' ? 'Create an agent account' : 'Sign in'}</button></p>
         </div>
       </section>
     </main>

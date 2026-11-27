@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { authFailureMessage, authResponseError } from '../auth-errors';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -9,6 +10,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -35,14 +37,16 @@ export default function LoginPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code: googleCode }),
         });
-        if (!response.ok) throw new Error('Google sign-in code is invalid or expired.');
+        if (!response.ok) {
+          throw new Error(await authResponseError(response, 'Google sign-in code is invalid or expired.'));
+        }
         const result = await response.json() as { data: { accessToken: string; refreshToken: string; user: { email: string } } };
         window.sessionStorage.setItem('print-attest-access-token', result.data.accessToken);
         window.localStorage.setItem('print-attest-refresh-token', result.data.refreshToken);
         window.localStorage.setItem('print-attest-session', JSON.stringify({ phone: '', name: result.data.user.email.split('@')[0], email: result.data.user.email }));
         router.replace('/dashboard');
-      } catch {
-        setError('Google sign-in could not be completed. Please try again.');
+      } catch (caught) {
+        setError(authFailureMessage(caught, 'Google sign-in could not be completed.'));
       }
     };
     void exchange();
@@ -59,21 +63,25 @@ export default function LoginPage() {
       return;
     }
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+      setSubmitting(true);
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1').replace(/\/+$/, '');
       const response = await fetch(`${apiUrl}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), password }),
       });
-      if (response.status === 401) throw new Error('Email or password is incorrect.');
-      if (!response.ok) throw new Error('Sign-in service is unavailable. Please try again later.');
+      if (!response.ok) {
+        throw new Error(await authResponseError(response, 'Sign-in could not be completed.', 'Email or password is incorrect.'));
+      }
       const result = await response.json() as { data: { accessToken: string; refreshToken: string; user: { email: string } } };
       window.sessionStorage.setItem('print-attest-access-token', result.data.accessToken);
       window.localStorage.setItem('print-attest-refresh-token', result.data.refreshToken);
       window.localStorage.setItem('print-attest-session', JSON.stringify({ phone: '', name: email.split('@')[0], email: result.data.user.email }));
       router.push('/dashboard');
     } catch (caught) {
-      setError(caught instanceof TypeError ? 'Could not reach the sign-in service. Please try again later.' : caught instanceof Error ? caught.message : 'Sign-in failed.');
+      setError(authFailureMessage(caught, 'Sign-in could not be completed.'));
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -95,10 +103,10 @@ export default function LoginPage() {
         </div>
         <div className="auth-divider"><span>or sign in with email</span></div>
         <form onSubmit={submit}>
-          <label className="field-label">Email address<input type="email" autoComplete="email" value={email} onChange={(event) => { setEmail(event.target.value); setError(''); }} placeholder="you@gmail.com" /></label>
-          <label className="field-label">Password<input type="password" autoComplete="current-password" value={password} onChange={(event) => { setPassword(event.target.value); setError(''); }} placeholder="Your password" /></label>
+          <label className="field-label">Email address<input type="email" autoComplete="email" maxLength={254} required value={email} onChange={(event) => { setEmail(event.target.value); setError(''); }} placeholder="you@gmail.com" /></label>
+          <label className="field-label">Password<input type="password" autoComplete="current-password" maxLength={128} required value={password} onChange={(event) => { setPassword(event.target.value); setError(''); }} placeholder="Your password" /></label>
           {error && <p className="auth-error" role="alert">{error}</p>}
-          <button className="button button--primary auth-submit" type="submit">Sign in <span>→</span></button>
+          <button className="button button--primary auth-submit" type="submit" disabled={submitting}>{submitting ? 'Signing in…' : 'Sign in'} <span>→</span></button>
         </form>
         <button className="auth-back" type="button" onClick={() => router.push('/forgot-password')}>Forgot password?</button>
         <p className="auth-legal">By continuing, you agree to our Terms and Privacy Policy.</p>
