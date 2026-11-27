@@ -7,7 +7,8 @@ INSERT INTO "PlatformCatalogService" (
   "enabled",
   "requiresOriginals",
   "requiredOriginals",
-  "supportingDocuments"
+  "supportingDocuments",
+  "updatedAt"
 )
 VALUES
   (
@@ -19,7 +20,8 @@ VALUES
     TRUE,
     TRUE,
     ARRAY['Original degree certificate'],
-    ARRAY['National identity document']
+    ARRAY['National identity document'],
+    CURRENT_TIMESTAMP
   ),
   (
     'birth-certificate-copy',
@@ -30,7 +32,8 @@ VALUES
     TRUE,
     FALSE,
     ARRAY[]::TEXT[],
-    ARRAY['Applicant identity document', 'Birth details']
+    ARRAY['Applicant identity document', 'Birth details'],
+    CURRENT_TIMESTAMP
   ),
   (
     'document-legalization',
@@ -41,6 +44,7 @@ VALUES
     TRUE,
     TRUE,
     ARRAY['Original document'],
-    ARRAY['National identity document']
+    ARRAY['National identity document'],
+    CURRENT_TIMESTAMP
   )
 ON CONFLICT ("code") DO NOTHING;
