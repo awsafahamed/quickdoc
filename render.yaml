@@ -13,7 +13,7 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: WEB_ORIGINS
-        sync: false
+        value: https://customer-web-murex-seven.vercel.app,https://shop-web-gray.vercel.app,https://rider-web-blue.vercel.app,https://agent-web-neon.vercel.app,https://admin-web-omega-nine.vercel.app
       - key: CUSTOMER_WEB_ORIGIN
         value: https://customer-web-murex-seven.vercel.app
       - key: RESEND_API_KEY
