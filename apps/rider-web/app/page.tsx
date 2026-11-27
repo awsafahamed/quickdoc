@@ -291,7 +291,7 @@ function RiderRegistration({ initialError, onRegistered }: { initialError: strin
       <section className="rider-registration-copy"><span className="registration-mark">P</span><p>RIDER PORTAL</p><h1>Make every delivery count.</h1><p>Complete verification to receive print and attestation delivery requests.</p></section>
       <section className="rider-registration-panel"><div className="rider-auth-tabs"><button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); }}>Create account</button><button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); }}>Log in</button></div><p className="step-label">{mode === 'register' ? 'Rider registration' : 'Rider account access'}</p><h2>{mode === 'register' ? 'Create your rider account' : 'Welcome back'}</h2><form onSubmit={async (event) => {
         event.preventDefault();
-        if (password.length < 8) { setError('Enter an 8-character password.'); return; }
+        if (!password) { setError('Enter your password.'); return; }
         if (mode === 'register' && !/^\+94[0-9]{9}$/.test(phone)) { setError('Enter a valid Sri Lanka mobile number.'); return; }
         setSubmitting(true);
         setError('');

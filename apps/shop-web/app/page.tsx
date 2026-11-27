@@ -8,6 +8,7 @@ type View =
   | 'delivery'
   | 'services'
   | 'inventory'
+  | 'catalog'
   | 'customers'
   | 'earnings'
   | 'reports'
@@ -100,13 +101,24 @@ type Customer = {
 type Notice = { id: string; title: string; body: string; readAt: string | null; createdAt: string };
 type OpeningHour = { dayOfWeek: number; opensAt: string; closesAt: string; isClosed: boolean };
 type StaffMember = { shopId: string; userId: string; User?: { id: string; name: string; email: string } };
+type CatalogFolder = { id: string; name: string; parentId: string | null };
+type CatalogDocument = {
+  id: string;
+  name: string;
+  description: string;
+  sizeBytes: number;
+  pageCount: number | null;
+  folderId: string | null;
+  folder?: { id: string; name: string } | null;
+  isPublished: boolean;
+};
 
 type Envelope<T> = { data: T; pagination?: { page: number; pageSize: number; total: number; totalPages: number } };
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1').replace(/\/+$/, '');
 const navGroups: { label: string; items: { id: View; label: string; icon: string }[] }[] = [
   { label: 'Workspace', items: [{ id: 'overview', label: 'Overview', icon: 'grid' }, { id: 'orders', label: 'Orders', icon: 'orders' }, { id: 'delivery', label: 'Delivery handover', icon: 'delivery' }] },
-  { label: 'Manage', items: [{ id: 'services', label: 'Services & pricing', icon: 'tag' }, { id: 'inventory', label: 'Inventory', icon: 'box' }, { id: 'customers', label: 'Customers', icon: 'users' }] },
+  { label: 'Manage', items: [{ id: 'services', label: 'Services & pricing', icon: 'tag' }, { id: 'inventory', label: 'Inventory', icon: 'box' }, { id: 'catalog', label: 'Document catalogue', icon: 'catalog' }, { id: 'customers', label: 'Customers', icon: 'users' }] },
   { label: 'Business', items: [{ id: 'earnings', label: 'Earnings & payouts', icon: 'wallet' }, { id: 'reports', label: 'Reports', icon: 'chart' }, { id: 'team', label: 'Team access', icon: 'team' }, { id: 'profile', label: 'Shop profile', icon: 'shop' }, { id: 'settings', label: 'Settings', icon: 'settings' }, { id: 'support', label: 'Help & support', icon: 'bell' }] },
 ];
 
@@ -199,6 +211,7 @@ function Icon({ name, size = 19 }: { name: string; size?: number }) {
     delivery: 'M3 6h11v11H3zM14 10h4l3 3v4h-7zM7 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
     tag: 'M3.5 12V4h8l9 8-8.5 8.5zM7.5 8h.01',
     box: 'm12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5 12 12l8-4.5M12 12v9',
+    catalog: 'M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21zM4 5.5V21M8 7h8M8 11h8',
     users: 'M16 20a5 5 0 0 0-10 0M11 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM18 9a3 3 0 0 1 0 6M20 20a4 4 0 0 0-3-3.8',
     wallet: 'M3.5 6.5h17v14h-17zM3.5 9.5h17M16 14h2',
     chart: 'M4 19.5h16M6.5 16V9M12 16V4.5M17.5 16v-5',
@@ -224,74 +237,153 @@ function Icon({ name, size = 19 }: { name: string; size?: number }) {
 }
 
 export default function ShopPortal() {
-  const [auth, setAuth] = useState<'checking' | 'anonymous' | 'ready'>('checking');
+  const [auth, setAuth] = useState<'checking' | 'anonymous' | 'setup' | 'ready'>('checking');
   const [shop, setShop] = useState<ShopProfile | null>(null);
   useEffect(() => {
     const token = window.sessionStorage.getItem('shop-access-token');
     if (!token) { setAuth('anonymous'); return; }
-    api<Envelope<ShopProfile>>('/shop/me')
-      .then((result) => { setShop(result.data); setAuth('ready'); })
-      .catch(() => { setAuth('anonymous'); });
+    let active = true;
+    const restore = async () => {
+      try {
+        const session = await api<Envelope<{ roles: string[] }>>('/auth/session');
+        if (!session.data.roles.includes('SHOP_OWNER')) {
+          window.sessionStorage.removeItem('shop-access-token');
+          if (active) setAuth('anonymous');
+          return;
+        }
+        try {
+          const result = await api<Envelope<ShopProfile>>('/shop/me');
+          if (active) { setShop(result.data); setAuth('ready'); }
+        } catch (reason) {
+          if (reason instanceof Error && reason.message.includes('No print shop is linked')) {
+            if (active) setAuth('setup');
+            return;
+          }
+          throw reason;
+        }
+      } catch {
+        window.sessionStorage.removeItem('shop-access-token');
+        if (active) setAuth('anonymous');
+      }
+    };
+    void restore();
+    return () => { active = false; };
   }, []);
   if (auth === 'checking') return <main className="auth-loading"><div className="skeleton skeleton--title" /><div className="skeleton skeleton--line" /><div className="skeleton skeleton--line short" /></main>;
-  if (auth === 'anonymous') return <RegistrationPage onReady={(profile) => { setShop(profile); setAuth('ready'); }} />;
+  if (auth === 'anonymous' || auth === 'setup') return <RegistrationPage initialMode={auth === 'setup' ? 'setup' : 'login'} onReady={(profile) => { setShop(profile); setAuth('ready'); }} />;
   if (!shop) return <main className="error-screen"><h1>Shop profile unavailable</h1><p>We could not load your shop details. Sign in again to continue.</p><button className="button button--primary" onClick={() => setAuth('anonymous')}>Return to sign in</button></main>;
   return <PortalWorkspace initialShop={shop} onSignOut={() => { window.sessionStorage.removeItem('shop-access-token'); window.localStorage.removeItem('shop-refresh-token'); window.localStorage.removeItem('print-shop-registered'); setAuth('anonymous'); }} />;
 }
 
-function RegistrationPage({ onReady }: { onReady: (profile: ShopProfile) => void }) {
-  const [mode, setMode] = useState<'register' | 'login'>('login');
+function RegistrationPage({ onReady, initialMode = 'login' }: { onReady: (profile: ShopProfile) => void; initialMode?: 'login' | 'setup' }) {
+  const [mode, setMode] = useState<'register' | 'login' | 'setup' | 'forgot'>(initialMode);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('+94');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [address, setAddress] = useState('');
+  const [latitude, setLatitude] = useState('');
+  const [longitude, setLongitude] = useState('');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [locationError, setLocationError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  const useCurrentLocation = () => {
+    setLocationError('');
+    if (!navigator.geolocation) { setLocationError('Location is unavailable in this browser. Enter the coordinates for your shop.'); return; }
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => { setLatitude(coords.latitude.toFixed(6)); setLongitude(coords.longitude.toFixed(6)); },
+      () => setLocationError('We could not read your location. Allow location access or enter coordinates manually.'),
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
+    );
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
-    if (!email.trim() || password.length < 8) { setError('Enter a valid email address and a password of at least 8 characters.'); return; }
-    if (mode === 'register' && (!name.trim() || !address.trim() || phone.trim().length < 7)) { setError('Complete the business name, phone number and address.'); return; }
+    setMessage('');
+    if (mode === 'forgot') {
+      if (!email.trim()) { setError('Enter your account email address.'); return; }
+      setBusy(true);
+      try {
+        await api('/auth/password/reset-request', { method: 'POST', json: { email: email.trim() } });
+        setMessage('If an account uses this email, password reset instructions are on the way.');
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : 'Password reset could not be requested.');
+      } finally { setBusy(false); }
+      return;
+    }
+    if (mode === 'login' && (!email.trim() || !password)) { setError('Enter your account email and password.'); return; }
+    if (mode === 'register' && password.length < 8) { setError('Choose a password with at least 8 characters.'); return; }
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+    if ((mode === 'register' || mode === 'setup') && (
+      !name.trim() || !address.trim() || phone.trim().length < 7
+      || !Number.isFinite(lat) || lat < -90 || lat > 90
+      || !Number.isFinite(lng) || lng < -180 || lng > 180
+    )) {
+      setError('Complete the shop details and set a valid location to help nearby customers find you.');
+      return;
+    }
     setBusy(true);
     try {
       if (mode === 'register') {
-        const registered = await api<Envelope<{ accessToken: string; refreshToken: string }>>('/auth/register/shop-owner', { method: 'POST', json: { name: name.trim(), email: email.trim(), phone: phone.trim(), password } });
+        const registered = await api<Envelope<{ accessToken: string; refreshToken: string }>>('/auth/register/shop-owner', { method: 'POST', json: { name: name.trim(), email: email.trim(), phone: phone.trim(), password, address: address.trim(), latitude: lat, longitude: lng } });
         window.sessionStorage.setItem('shop-access-token', registered.data.accessToken);
         window.localStorage.setItem('shop-refresh-token', registered.data.refreshToken);
-        const created = await api<Envelope<ShopProfile>>('/shops/register', { method: 'POST', json: { name: name.trim(), phone: phone.trim(), email: email.trim(), address: address.trim(), latitude: 6.9271, longitude: 79.8612 } });
+        const created = await api<Envelope<ShopProfile>>('/shop/me');
         window.localStorage.setItem('print-shop-registered', 'true');
-        window.localStorage.setItem('print-shop-name', name.trim());
+        window.localStorage.setItem('print-shop-name', created.data.name);
+        onReady(created.data);
+      } else if (mode === 'setup') {
+        const created = await api<Envelope<ShopProfile>>('/shops/register', { method: 'POST', json: { name: name.trim(), phone: phone.trim(), email: email.trim(), address: address.trim(), latitude: lat, longitude: lng } });
+        window.localStorage.setItem('print-shop-registered', 'true');
+        window.localStorage.setItem('print-shop-name', created.data.name);
         onReady(created.data);
       } else {
-        const loggedIn = await api<Envelope<{ accessToken: string; refreshToken: string }>>('/auth/login', { method: 'POST', json: { email: email.trim(), password } });
+        const loggedIn = await api<Envelope<{ accessToken: string; refreshToken: string; user: { roles: string[] } }>>('/auth/login', { method: 'POST', json: { email: email.trim(), password } });
+        if (!loggedIn.data.user.roles.includes('SHOP_OWNER')) {
+          setError('This account does not have shop-owner access. Use a shop-owner account or create one.');
+          return;
+        }
         window.sessionStorage.setItem('shop-access-token', loggedIn.data.accessToken);
         window.localStorage.setItem('shop-refresh-token', loggedIn.data.refreshToken);
-        const profile = await api<Envelope<ShopProfile>>('/shop/me');
-        window.localStorage.setItem('print-shop-registered', 'true');
-        window.localStorage.setItem('print-shop-name', profile.data.name);
-        onReady(profile.data);
+        try {
+          const profile = await api<Envelope<ShopProfile>>('/shop/me');
+          window.localStorage.setItem('print-shop-registered', 'true');
+          window.localStorage.setItem('print-shop-name', profile.data.name);
+          onReady(profile.data);
+        } catch (reason) {
+          if (reason instanceof Error && reason.message.includes('No print shop is linked')) {
+            setMode('setup');
+            setMessage('You are signed in. Complete your shop details to finish setting up this account.');
+            return;
+          }
+          throw reason;
+        }
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'We could not complete sign in. Please try again.');
-      window.sessionStorage.removeItem('shop-access-token');
     } finally { setBusy(false); }
   };
 
   return <main className="auth-page">
     <section className="auth-brand"><a className="brand brand--auth" href="/" aria-label="QuickDoc home"><span className="brand-mark">q</span><span>quickdoc</span></a><div className="auth-brand-copy"><span className="brand-kicker">SHOP OWNER WORKSPACE</span><h1>Your print business,<br />in good order.</h1><p>One calm place to manage jobs, production, customers and payouts.</p></div><div className="auth-brand-foot"><span className="brand-mark brand-mark--small">q</span><span>QuickDoc partner network</span></div></section>
     <section className="auth-panel"><div className="auth-panel-inner">
-      <div className="auth-switch" role="tablist" aria-label="Account action"><button type="button" role="tab" aria-selected={mode === 'login'} className={mode === 'login' ? 'selected' : ''} onClick={() => { setMode('login'); setError(''); }}>Sign in</button><button type="button" role="tab" aria-selected={mode === 'register'} className={mode === 'register' ? 'selected' : ''} onClick={() => { setMode('register'); setError(''); }}>Create shop account</button></div>
-      <h2>{mode === 'login' ? 'Welcome back' : 'Set up your shop'}</h2><p className="auth-subtitle">{mode === 'login' ? 'Sign in to pick up where you left off.' : 'Start with your business details. New shops are reviewed before they can accept orders.'}</p>
+      {(mode === 'login' || mode === 'register') && <div className="auth-switch" role="tablist" aria-label="Account action"><button type="button" role="tab" aria-selected={mode === 'login'} className={mode === 'login' ? 'selected' : ''} onClick={() => { setMode('login'); setError(''); setMessage(''); }}>Sign in</button><button type="button" role="tab" aria-selected={mode === 'register'} className={mode === 'register' ? 'selected' : ''} onClick={() => { setMode('register'); setError(''); setMessage(''); }}>Create shop account</button></div>}
+      <h2>{mode === 'login' ? 'Welcome back' : mode === 'forgot' ? 'Reset your password' : mode === 'setup' ? 'Finish shop setup' : 'Set up your shop'}</h2><p className="auth-subtitle">{mode === 'login' ? 'Sign in to pick up where you left off.' : mode === 'forgot' ? 'We will email a secure reset link if this account exists.' : mode === 'setup' ? 'Your account is signed in. Add the shop details needed to use the workspace.' : 'Start with your business details. New shops are reviewed before they can accept orders.'}</p>
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
-        {mode === 'register' && <><label>Business name<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your print shop" autoComplete="organization" /></label><label>Business phone<input required minLength={7} maxLength={20} value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" /></label><label>Shop address<input required minLength={5} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street, building and city" autoComplete="street-address" /></label></>}
-        <label>Business email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@business.com" /></label>
-        <label>Password<input required type="password" minLength={8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" /></label>
+        {(mode === 'register' || mode === 'setup') && <><label>Business name<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your print shop" autoComplete="organization" /></label><label>Business phone<input required minLength={7} maxLength={20} value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" /></label><label>Shop address<input required minLength={5} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street, building and city" autoComplete="street-address" /></label><div className="location-fields"><button className="button button--secondary" type="button" onClick={useCurrentLocation}>Use current location</button><label>Latitude<input required type="number" step="any" min="-90" max="90" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="6.9271" /></label><label>Longitude<input required type="number" step="any" min="-180" max="180" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="79.8612" /></label></div>{locationError && <p className="form-error" role="alert">{locationError}</p>}</>}
+        {(mode === 'login' || mode === 'register' || mode === 'forgot') && <label>Business email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@business.com" /></label>}
+        {(mode === 'login' || mode === 'register') && <label>Password<input required type="password" minLength={8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" /></label>}
         {error && <p className="form-error" role="alert">{error}</p>}
-        <button className="button button--primary button--wide" disabled={busy} type="submit">{busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}</button>
+        {message && <p className="success-message" role="status">{message}</p>}
+        <button className="button button--primary button--wide" disabled={busy} type="submit">{busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : mode === 'forgot' ? 'Send reset link' : mode === 'setup' ? 'Save shop details' : 'Create account'}</button>
       </form>
-      {mode === 'register' && <p className="auth-note">Your shop must be approved before it becomes available to customers.</p>}
+      {mode === 'login' && <button className="auth-link" type="button" onClick={() => { setMode('forgot'); setError(''); setMessage(''); }}>Forgot password?</button>}
+      {mode === 'forgot' && <button className="auth-link" type="button" onClick={() => { setMode('login'); setError(''); setMessage(''); }}>Back to sign in</button>}
+      {mode === 'register' && <p className="auth-note">Your shop must be approved before it appears in customer search.</p>}
     </div></section>
   </main>;
 }
@@ -336,6 +428,7 @@ function PortalWorkspace({ initialShop, onSignOut }: { initialShop: ShopProfile;
       {view === 'delivery' && <DeliveryPage />}
       {view === 'services' && <ServicesPage />}
       {view === 'inventory' && <InventoryPage />}
+      {view === 'catalog' && <CatalogPage />}
       {view === 'customers' && <CustomersPage />}
       {view === 'earnings' && <EarningsPage />}
       {view === 'reports' && <ReportsPage />}
@@ -638,6 +731,180 @@ function InventoryPage() {
     <div className="inventory-summary"><div><span>Tracked items</span><strong>{loading ? '—' : items.length}</strong></div><div className={lowStock ? 'inventory-warning' : ''}><span>At or below reorder level</span><strong>{loading ? '—' : lowStock}</strong></div></div>
     <form className="panel inventory-form" onSubmit={(event) => void submit(event)}><div className="panel-heading"><div><h2>{editing ? 'Edit inventory item' : 'Add stock item'}</h2><p>Quantities and reorder levels are saved to your shop account.</p></div>{editing && <button className="text-button" type="button" onClick={() => { setEditing(null); setForm({ name: '', category: '', unit: 'sheets', quantity: '', reorderLevel: '' }); }}>Cancel edit</button>}</div><div className="form-grid form-grid--inventory"><label>Item name<input required maxLength={120} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="A4 paper, 80 gsm" /></label><label>Category<input required maxLength={60} value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="Paper" /></label><label>Unit<input required maxLength={24} value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })} placeholder="sheets" /></label><label>Current quantity<input required min="0" step="0.01" type="number" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: event.target.value })} /></label><label>Reorder at<input required min="0" step="0.01" type="number" value={form.reorderLevel} onChange={(event) => setForm({ ...form, reorderLevel: event.target.value })} /></label><button className="button button--primary form-submit" type="submit" disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Add item'}</button></div></form>
     {loading ? <div className="panel"><LoadingRows /></div> : items.length ? <div className="panel table-panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>Item</th><th>Category</th><th>On hand</th><th>Reorder level</th><th>Stock</th><th /></tr></thead><tbody>{items.map((item) => { const low = Number(item.quantity) <= Number(item.reorderLevel); return <tr key={item.id}><td><strong>{item.name}</strong><small className="sub-cell">Updated {dateLabel(item.updatedAt)}</small></td><td>{item.category}</td><td className="amount-cell">{item.quantity} {item.unit}</td><td>{item.reorderLevel} {item.unit}</td><td><StatusBadge status={low ? 'Low stock' : 'In stock'} /></td><td className="row-actions"><button className="text-button" type="button" onClick={() => edit(item)}>Edit</button><button className="icon-button danger-icon" type="button" aria-label={`Remove ${item.name}`} onClick={() => void remove(item.id)}><Icon name="trash" size={16} /></button></td></tr>; })}</tbody></table></div></div> : <EmptyState title="No stock items tracked" body="Add your first paper or finishing supply above. Stock alerts will appear when quantities reach their reorder levels." />}
+  </section>;
+}
+
+function CatalogPage() {
+  const [folders, setFolders] = useState<CatalogFolder[]>([]);
+  const [documents, setDocuments] = useState<CatalogDocument[]>([]);
+  const [folderName, setFolderName] = useState('');
+  const [parentFolderId, setParentFolderId] = useState('');
+  const [folderFilter, setFolderFilter] = useState('all');
+  const [file, setFile] = useState<File | null>(null);
+  const [description, setDescription] = useState('');
+  const [pageCount, setPageCount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    setError('');
+    api<Envelope<{ folders: CatalogFolder[]; documents: CatalogDocument[] }>>('/shop/me/catalog')
+      .then(({ data }) => { setFolders(data.folders); setDocuments(data.documents); })
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Catalogue could not be loaded.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const createFolder = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await api('/shop/me/catalog/folders', {
+        method: 'POST',
+        json: { name: folderName.trim(), parentId: parentFolderId || undefined },
+      });
+      setFolderName('');
+      setMessage('Folder created.');
+      reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Folder could not be created.');
+    } finally { setBusy(false); }
+  };
+
+  const uploadDocument = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!file) { setError('Choose a PDF to add to your catalogue.'); return; }
+    if (file.type !== 'application/pdf' || !file.name.toLowerCase().endsWith('.pdf')) {
+      setError('Only PDF catalogue documents are supported.');
+      return;
+    }
+    if (file.size < 1 || file.size > 25 * 1024 * 1024) {
+      setError('Choose a PDF smaller than 25 MB.');
+      return;
+    }
+    const signature = new TextDecoder().decode(await file.slice(0, 5).arrayBuffer());
+    if (signature !== '%PDF-') { setError('This file does not have a valid PDF signature.'); return; }
+
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const upload = await api<Envelope<{ objectKey: string; uploadUrl: string }>>('/shop/me/catalog/upload-url', {
+        method: 'POST',
+        json: { name: file.name, mimeType: 'application/pdf', sizeBytes: file.size },
+      });
+      const putResponse = await fetch(upload.data.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/pdf' },
+        body: file,
+      });
+      if (!putResponse.ok) throw new Error('The PDF could not be uploaded to private storage. Check bucket CORS settings and try again.');
+      await api('/shop/me/catalog/documents', {
+        method: 'POST',
+        json: {
+          name: file.name,
+          mimeType: 'application/pdf',
+          sizeBytes: file.size,
+          pageCount: pageCount ? Number(pageCount) : undefined,
+          description: description.trim(),
+          folderId: folderFilter === 'all' || folderFilter === 'root' ? undefined : folderFilter,
+          objectKey: upload.data.objectKey,
+        },
+      });
+      setFile(null);
+      setDescription('');
+      setPageCount('');
+      setMessage('PDF added to your published catalogue.');
+      reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'PDF could not be added.');
+    } finally { setBusy(false); }
+  };
+
+  const removeFolder = async (folder: CatalogFolder) => {
+    setError(''); setMessage('');
+    try {
+      await api(`/shop/me/catalog/folders/${folder.id}`, { method: 'DELETE' });
+      setMessage(`Folder "${folder.name}" removed.`);
+      if (folderFilter === folder.id) setFolderFilter('all');
+      reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Folder could not be removed.');
+    }
+  };
+
+  const renameFolder = async (folder: CatalogFolder) => {
+    const name = window.prompt('New folder name', folder.name)?.trim();
+    if (!name || name === folder.name) return;
+    setError(''); setMessage('');
+    try {
+      await api(`/shop/me/catalog/folders/${folder.id}`, { method: 'PATCH', json: { name } });
+      setMessage('Folder renamed.');
+      reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Folder could not be renamed.');
+    }
+  };
+
+  const updateDocument = async (document: CatalogDocument, update: { folderId?: string | null; isPublished?: boolean }) => {
+    setError(''); setMessage('');
+    try {
+      await api(`/shop/me/catalog/documents/${document.id}`, { method: 'PATCH', json: update });
+      setMessage(document.name + (update.isPublished === undefined ? ' moved.' : update.isPublished ? ' published.' : ' hidden from customers.'));
+      reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Catalogue document could not be updated.');
+    }
+  };
+
+  const removeDocument = async (document: CatalogDocument) => {
+    if (!window.confirm(`Remove "${document.name}" from your catalogue?`)) return;
+    setError(''); setMessage('');
+    try {
+      await api(`/shop/me/catalog/documents/${document.id}`, { method: 'DELETE' });
+      setMessage('Catalogue document removed.');
+      reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Catalogue document could not be removed.');
+    }
+  };
+
+  const visibleDocuments = documents.filter((document) => {
+    if (folderFilter === 'all') return true;
+    return folderFilter === 'root' ? !document.folderId : document.folderId === folderFilter;
+  });
+  const folderNameFor = (id: string | null) => folders.find((folder) => folder.id === id)?.name ?? 'Unsorted';
+
+  return <section className="content">
+    <PageHeader title="Document catalogue" description="Organize the PDFs customers can discover and choose for printing." />
+    {error && <LoadError message={error} retry={reload} />}
+    {message && <p className="success-message" role="status">{message}</p>}
+    <div className="catalog-management">
+      <form className="panel catalog-folder-form" onSubmit={(event) => void createFolder(event)}>
+        <div className="panel-heading"><div><h2>Create a folder</h2><p>Use folders for grades, past papers, forms, or any categories your shop needs.</p></div></div>
+        <label>Folder name<input required maxLength={120} value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="Grade 10 past papers" /></label>
+        <label>Inside folder<select value={parentFolderId} onChange={(event) => setParentFolderId(event.target.value)}><option value="">Top level</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+        <button className="button button--primary" type="submit" disabled={busy || !folderName.trim()}><Icon name="plus" size={16} />Create folder</button>
+      </form>
+      <form className="panel catalog-upload-form" onSubmit={(event) => void uploadDocument(event)}>
+        <div className="panel-heading"><div><h2>Add a catalogue PDF</h2><p>Published documents appear in customer search after your shop is approved.</p></div></div>
+        <label>PDF file<input required type="file" accept=".pdf,application/pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
+        <label>Description <span className="field-label__optional">Optional</span><input maxLength={1000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Past paper bundle, 2025 edition" /></label>
+        <label>Pages <span className="field-label__optional">Optional</span><input type="number" min="1" max="10000" value={pageCount} onChange={(event) => setPageCount(event.target.value)} placeholder="Enter if known" /></label>
+        <label>Save to folder<select value={folderFilter === 'all' || folderFilter === 'root' ? '' : folderFilter} onChange={(event) => setFolderFilter(event.target.value || 'root')}><option value="">Top level</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+        <button className="button button--primary" type="submit" disabled={busy || !file}>{busy ? 'Uploading securely…' : 'Add PDF to catalogue'}</button>
+      </form>
+    </div>
+    <section className="panel catalog-folders">
+      <div className="panel-heading"><div><h2>Your folders</h2><p>{folders.length} folder{folders.length === 1 ? '' : 's'} · {documents.length} PDF{documents.length === 1 ? '' : 's'}</p></div></div>
+      {folders.length ? <div className="catalog-folder-list">{folders.map((folder) => <div className="catalog-folder-row" key={folder.id}><button className="text-button" type="button" onClick={() => setFolderFilter(folder.id)}>{folder.parentId ? `${folderNameFor(folder.parentId)} / ` : ''}{folder.name}</button><div className="row-actions"><button className="text-button" type="button" onClick={() => void renameFolder(folder)}>Rename</button><button className="text-button text-button--danger" type="button" onClick={() => void removeFolder(folder)}>Remove</button></div></div>)}</div> : <p className="catalog-empty-copy">Create folders to organize your catalogue. PDFs can also stay at the top level.</p>}
+    </section>
+    <section className="panel catalog-document-panel">
+      <div className="panel-heading"><div><h2>Catalogue PDFs</h2><p>Only published PDFs from approved shops are shown in customer search.</p></div><label className="select-field"><span>Show</span><select value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}><option value="all">All folders</option><option value="root">Top level</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label></div>
+      {loading ? <LoadingRows /> : visibleDocuments.length ? <div className="catalog-document-list">{visibleDocuments.map((document) => <article className="catalog-document-row" key={document.id}><span className="catalog-document-mark">PDF</span><div className="catalog-document-copy"><strong>{document.name}</strong><small>{folderNameFor(document.folderId)} · {Math.ceil(document.sizeBytes / 1024)} KB{document.pageCount ? ` · ${document.pageCount} pages` : ''}</small>{document.description && <small>{document.description}</small>}</div><label className="toggle-control"><input type="checkbox" checked={document.isPublished} onChange={(event) => void updateDocument(document, { isPublished: event.target.checked })} /><span /><b>{document.isPublished ? 'Published' : 'Hidden'}</b></label><select aria-label={`Move ${document.name} to a folder`} value={document.folderId ?? ''} onChange={(event) => void updateDocument(document, { folderId: event.target.value || null })}><option value="">Top level</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><button className="icon-button danger-icon" type="button" aria-label={`Remove ${document.name}`} onClick={() => void removeDocument(document)}><Icon name="trash" size={16} /></button></article>)}</div> : <EmptyState title={folderFilter === 'all' ? 'No catalogue PDFs yet' : 'No PDFs in this folder'} body="Add study papers, past papers, or everyday forms so customers can find and select them." />}
+    </section>
   </section>;
 }
 

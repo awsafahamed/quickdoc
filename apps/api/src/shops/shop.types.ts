@@ -3,7 +3,7 @@ export interface PrintShop {
   name: string;
   description: string;
   address: string;
-  distanceKm: number;
+  distanceKm: number | null;
   rating: number;
   reviewCount: number;
   estimatedMinutes: number;

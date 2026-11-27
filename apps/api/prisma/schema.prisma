@@ -129,6 +129,8 @@ model Shop {
   openingHours ShopOpeningHour[]
   ShopPrice    ShopPrice[]
   inventory    ShopInventoryItem[]
+  catalogFolders ShopCatalogFolder[]
+  catalogDocuments ShopCatalogDocument[]
   services     ShopService[]
   staff        ShopStaff[]
 
@@ -185,6 +187,41 @@ model ShopInventoryItem {
   shop         Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@index([shopId, updatedAt])
+}
+
+model ShopCatalogFolder {
+  id        String               @id @default(uuid()) @db.Uuid
+  shopId    String               @db.Uuid
+  parentId  String?              @db.Uuid
+  name      String               @db.VarChar(120)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  shop      Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  parent    ShopCatalogFolder?   @relation("ShopCatalogFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  ShopCatalogFolder[]  @relation("ShopCatalogFolderTree")
+  documents ShopCatalogDocument[]
+
+  @@index([shopId, parentId, name])
+}
+
+model ShopCatalogDocument {
+  id          String            @id @default(uuid()) @db.Uuid
+  shopId      String            @db.Uuid
+  folderId    String?           @db.Uuid
+  objectKey   String            @unique
+  name        String            @db.VarChar(255)
+  description String            @default("") @db.VarChar(1000)
+  mimeType    String            @default("application/pdf")
+  sizeBytes   Int
+  pageCount   Int?
+  isPublished Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  shop        Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  folder      ShopCatalogFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@index([shopId, folderId, isPublished])
+  @@index([name])
 }
 
 model Order {

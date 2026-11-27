@@ -16,6 +16,10 @@ services:
         sync: false
       - key: CUSTOMER_WEB_ORIGIN
         value: https://customer-web-murex-seven.vercel.app
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
       - key: GOOGLE_OAUTH_CLIENT_ID
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_SECRET

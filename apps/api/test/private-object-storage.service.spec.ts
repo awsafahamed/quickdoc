@@ -10,6 +10,7 @@ describe('PrivateObjectStorageService local test backend', () => {
   let directory: string;
   const signingSecret = 'local-test-signing-secret-that-is-long-enough';
   const objectKey = () => `private/customers/${randomUUID()}/${randomUUID()}.pdf`;
+  const shopObjectKey = () => `private/shops/${randomUUID()}/${randomUUID()}.pdf`;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'quickdoc-private-documents-'));
@@ -64,13 +65,31 @@ describe('PrivateObjectStorageService local test backend', () => {
 
     const key = objectKey();
     const token = tokenFrom(await storage.createUploadUrl(key));
-    const alteredToken = `${token.slice(0, -1)}${token.endsWith('x') ? 'y' : 'x'}`;
+    const [payload, signature] = token.split('.');
+    const alteredToken = `${payload}.${signature[0] === 'A' ? 'B' : 'A'}${signature.slice(1)}`;
     await expect(storage.writeLocalUpload(alteredToken, 'application/pdf', Buffer.from('%PDF-')))
       .rejects.toBeInstanceOf(BadRequestException);
     await expect(storage.writeLocalUpload(token, 'application/pdf', Buffer.from('not a PDF')))
       .rejects.toBeInstanceOf(BadRequestException);
     await expect(storage.writeLocalUpload(token, 'application/pdf', Buffer.alloc(25 * 1024 * 1024 + 1)))
       .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('copies a private shop catalogue PDF into a customer-owned private key', async () => {
+    const storage = createStorage();
+    const sourceKey = shopObjectKey();
+    const customerKey = objectKey();
+    const pdf = Buffer.from('%PDF-1.4\ncatalog document');
+    const uploadToken = tokenFrom(await storage.createUploadUrl(sourceKey));
+
+    await storage.writeLocalUpload(uploadToken, 'application/pdf', pdf);
+    await storage.copyCatalogPdfToCustomer(sourceKey, customerKey);
+    await expect(storage.verifyPdfUpload(customerKey, pdf.length)).resolves.toBeUndefined();
+    const previewToken = tokenFrom(await storage.createPreviewUrl(customerKey, 'selected.pdf'));
+    await expect(storage.readLocalPreview(previewToken)).resolves.toEqual({
+      body: pdf,
+      fileName: 'selected.pdf',
+    });
   });
 
   it('refuses local filesystem storage in production', async () => {

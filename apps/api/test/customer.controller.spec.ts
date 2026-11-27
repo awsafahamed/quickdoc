@@ -5,6 +5,78 @@ import { PrivateObjectStorageService } from '../src/storage/private-object-stora
 import { DeliverySpeed, PrintColour, PrintPaperSize, PrintSides } from '../src/print/print.types';
 
 describe('CustomerController private documents', () => {
+  it('copies a currently published catalogue document into the signed-in customer’s document library', async () => {
+    const catalogDocument = {
+      id: 'catalog-document-id',
+      name: 'Grade 10 mathematics.pdf',
+      objectKey: 'private/shops/shop-id/catalog-document.pdf',
+      sizeBytes: 1200,
+      pageCount: 8,
+    };
+    const createdDocument = {
+      id: 'customer-document-id',
+      userId: 'customer-id',
+      name: catalogDocument.name,
+      objectKey: 'private/customers/customer-id/selected-document.pdf',
+    };
+    const prisma = {
+      shopCatalogDocument: { findFirst: jest.fn().mockResolvedValue(catalogDocument) },
+      document: { create: jest.fn().mockResolvedValue(createdDocument) },
+    } as unknown as PrismaService;
+    const storage = {
+      copyCatalogPdfToCustomer: jest.fn().mockResolvedValue(undefined),
+    } as unknown as PrivateObjectStorageService;
+    const controller = new CustomerController(prisma, {} as PrintPricingService, storage);
+
+    const result = await controller.selectCatalogDocument('catalog-document-id', { user: { id: 'customer-id' } });
+
+    expect(prisma.shopCatalogDocument.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'catalog-document-id',
+        isPublished: true,
+        shop: { status: 'APPROVED', isOpen: true },
+      },
+    });
+    expect(storage.copyCatalogPdfToCustomer).toHaveBeenCalledWith(
+      catalogDocument.objectKey,
+      expect.stringMatching(/^private\/customers\/customer-id\/[0-9a-f-]+\.pdf$/),
+    );
+    expect(prisma.document.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        userId: 'customer-id',
+        name: catalogDocument.name,
+        mimeType: 'application/pdf',
+      }),
+    }));
+    expect(result.data).toBe(createdDocument);
+  });
+
+  it('removes the customer copy when persisting a selected catalogue document fails', async () => {
+    const prisma = {
+      shopCatalogDocument: {
+        findFirst: jest.fn().mockResolvedValue({
+          name: 'Grade 10 mathematics.pdf',
+          objectKey: 'private/shops/shop-id/catalog-document.pdf',
+          sizeBytes: 1200,
+          pageCount: 8,
+        }),
+      },
+      document: { create: jest.fn().mockRejectedValue(new Error('database unavailable')) },
+    } as unknown as PrismaService;
+    const storage = {
+      copyCatalogPdfToCustomer: jest.fn().mockResolvedValue(undefined),
+      deleteObject: jest.fn().mockResolvedValue(undefined),
+    } as unknown as PrivateObjectStorageService;
+    const controller = new CustomerController(prisma, {} as PrintPricingService, storage);
+
+    await expect(controller.selectCatalogDocument('catalog-document-id', { user: { id: 'customer-id' } }))
+      .rejects.toThrow('database unavailable');
+
+    expect(storage.deleteObject).toHaveBeenCalledWith(
+      expect.stringMatching(/^private\/customers\/customer-id\/[0-9a-f-]+\.pdf$/),
+    );
+  });
+
   it('creates an upload URL inside the authenticated customer prefix', async () => {
     const storage = { createUploadUrl: jest.fn().mockResolvedValue('https://private-storage.test/upload') } as unknown as PrivateObjectStorageService;
     const controller = new CustomerController({} as PrismaService, {} as PrintPricingService, storage);

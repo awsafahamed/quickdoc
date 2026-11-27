@@ -247,6 +247,43 @@ export class CustomerController {
     return { data: { deleted: true } };
   }
 
+  @Post('catalog/:documentId/select')
+  async selectCatalogDocument(
+    @Param('documentId') documentId: string,
+    @Req() request: { user: { id: string } },
+  ) {
+    const catalogDocument = await this.prisma.shopCatalogDocument.findFirst({
+      where: {
+        id: documentId,
+        isPublished: true,
+        shop: { status: 'APPROVED', isOpen: true },
+      },
+    });
+    if (!catalogDocument) throw new NotFoundException('This catalogue document is no longer available');
+
+    const objectKey = `private/customers/${request.user.id}/${randomUUID()}.pdf`;
+    await this.storage.copyCatalogPdfToCustomer(catalogDocument.objectKey, objectKey);
+    try {
+      const document = await this.prisma.document.create({
+        data: {
+          id: randomUUID(),
+          userId: request.user.id,
+          objectKey,
+          name: catalogDocument.name,
+          mimeType: 'application/pdf',
+          sizeBytes: catalogDocument.sizeBytes,
+          pageCount: catalogDocument.pageCount,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          updatedAt: new Date(),
+        },
+      });
+      return { data: document };
+    } catch (error) {
+      await this.storage.deleteObject(objectKey);
+      throw error;
+    }
+  }
+
   @Get('orders')
   async orders(@Req() request: { user: { id: string } }) {
     return { data: await this.prisma.order.findMany({ where: { customerId: request.user.id }, include: { Shop: true, OrderItem: true, OrderStatusHistory: { orderBy: { createdAt: 'desc' } }, DeliveryAssignment: { include: { DeliveryStatusHistory: { orderBy: { createdAt: 'desc' } } } }, Payment: true }, orderBy: { createdAt: 'desc' } }) };

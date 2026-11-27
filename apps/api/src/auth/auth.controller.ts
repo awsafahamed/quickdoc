@@ -2,7 +2,7 @@ import { Body, Controller, Get, Logger, Post, Req, Res, UseGuards } from '@nestj
 import type { Request, Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
-import { GoogleExchangeDto, LoginDto, OtpRequestDto, OtpVerifyDto, RefreshDto, RegisterDto, ResetPasswordDto, ResetRequestDto } from './auth.dto';
+import { GoogleExchangeDto, LoginDto, OtpRequestDto, OtpVerifyDto, RefreshDto, RegisterDto, ResetPasswordDto, ResetRequestDto, ShopOwnerRegisterDto } from './auth.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -16,8 +16,8 @@ export class AuthController {
   }
 
   @Post('register/shop-owner')
-  async registerShopOwner(@Body() dto: RegisterDto) {
-    return { data: await this.auth.register(dto, 'SHOP_OWNER') };
+  async registerShopOwner(@Body() dto: ShopOwnerRegisterDto) {
+    return { data: await this.auth.registerShopOwner(dto) };
   }
 
   @Post('register/rider')

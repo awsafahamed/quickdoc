@@ -1,4 +1,4 @@
-import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
+import { IsEmail, IsNumber, IsOptional, IsString, Length, Max, Min } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail()
@@ -18,12 +18,32 @@ export class RegisterDto {
 
 }
 
+export class ShopOwnerRegisterDto extends RegisterDto {
+  @IsString()
+  @Length(7, 20)
+  override phone: string = '';
+
+  @IsString()
+  @Length(5, 500)
+  address!: string;
+
+  @IsNumber({ maxDecimalPlaces: 7 })
+  @Min(-90)
+  @Max(90)
+  latitude!: number;
+
+  @IsNumber({ maxDecimalPlaces: 7 })
+  @Min(-180)
+  @Max(180)
+  longitude!: number;
+}
+
 export class LoginDto {
   @IsEmail()
   email!: string;
 
   @IsString()
-  @Length(8, 128)
+  @Length(1, 128)
   password!: string;
 }
 

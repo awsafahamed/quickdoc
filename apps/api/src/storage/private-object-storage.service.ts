@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   DeleteObjectCommand,
+  CopyObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
@@ -16,7 +17,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
 type LocalStorageOperation = 'upload' | 'preview';
@@ -29,6 +30,7 @@ type LocalStorageToken = {
 
 const MAX_DOCUMENT_SIZE_BYTES = 25 * 1024 * 1024;
 const CUSTOMER_PDF_KEY = /^private\/customers\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.pdf$/i;
+const SHOP_CATALOG_PDF_KEY = new RegExp(CUSTOMER_PDF_KEY.source.replace('customers', 'shops'), 'i');
 
 @Injectable()
 export class PrivateObjectStorageService {
@@ -92,7 +94,7 @@ export class PrivateObjectStorageService {
   }
 
   private localObjectPath(objectKey: string): string {
-    if (!CUSTOMER_PDF_KEY.test(objectKey)) {
+    if (!CUSTOMER_PDF_KEY.test(objectKey) && !SHOP_CATALOG_PDF_KEY.test(objectKey)) {
       throw new BadRequestException('Private document key is invalid');
     }
     const root = resolve(
@@ -205,6 +207,9 @@ export class PrivateObjectStorageService {
   }
 
   async verifyPdfUpload(objectKey: string, expectedSizeBytes: number): Promise<void> {
+    if (!CUSTOMER_PDF_KEY.test(objectKey) && !SHOP_CATALOG_PDF_KEY.test(objectKey)) {
+      throw new BadRequestException('Private document key is invalid');
+    }
     if (this.driver === 'local') {
       let document: Buffer;
       try {
@@ -248,6 +253,33 @@ export class PrivateObjectStorageService {
     if (!signature || new TextDecoder().decode(signature) !== '%PDF-') {
       throw new BadRequestException('The uploaded file is not a valid PDF');
     }
+  }
+
+  async copyCatalogPdfToCustomer(sourceKey: string, destinationKey: string): Promise<void> {
+    if (!SHOP_CATALOG_PDF_KEY.test(sourceKey) || !CUSTOMER_PDF_KEY.test(destinationKey)) {
+      throw new BadRequestException('Private document key is invalid');
+    }
+    if (this.driver === 'local') {
+      const sourcePath = this.localObjectPath(sourceKey);
+      const destinationPath = this.localObjectPath(destinationKey);
+      await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 });
+      try {
+        await copyFile(sourcePath, destinationPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new NotFoundException('The catalogue PDF is no longer available');
+        }
+        throw error;
+      }
+      return;
+    }
+    await this.getClient().send(new CopyObjectCommand({
+      Bucket: this.bucket,
+      CopySource: `${this.bucket}/${sourceKey.split('/').map(encodeURIComponent).join('/')}`,
+      Key: destinationKey,
+      ContentType: 'application/pdf',
+      MetadataDirective: 'REPLACE',
+    }));
   }
 
   async createPreviewUrl(objectKey: string, fileName: string): Promise<string> {

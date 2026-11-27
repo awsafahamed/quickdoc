@@ -4,7 +4,7 @@ import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypt
 import * as bcrypt from 'bcryptjs';
 import { OAuth2Client } from 'google-auth-library';
 import { PrismaService } from '../prisma/prisma.service';
-import { LoginDto, RegisterDto, ResetPasswordDto, ResetRequestDto, OtpRequestDto, OtpVerifyDto } from './auth.dto';
+import { LoginDto, RegisterDto, ResetPasswordDto, ResetRequestDto, OtpRequestDto, OtpVerifyDto, ShopOwnerRegisterDto } from './auth.dto';
 
 export type RegistrationRole = 'CUSTOMER' | 'SHOP_OWNER' | 'RIDER' | 'AGENT';
 
@@ -17,12 +17,13 @@ export class AuthService {
   constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService) {}
 
   async register(dto: RegisterDto, role: RegistrationRole = 'CUSTOMER') {
-    const existing = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() } });
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.prisma.user.findUnique({ where: { email } });
     if (existing) throw new ConflictException('An account already uses this email');
     const passwordHash = await bcrypt.hash(dto.password, 12);
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email.toLowerCase(),
+        email,
         name: dto.name,
         passwordHash,
         CustomerProfile: dto.phone ? { create: { phone: dto.phone } } : undefined,
@@ -37,8 +38,39 @@ export class AuthService {
     return this.issueSession(user.id, user.email, user.UserRole.map((role) => role.role));
   }
 
+  async registerShopOwner(dto: ShopOwnerRegisterDto) {
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) throw new ConflictException('An account already uses this email');
+    const passwordHash = await bcrypt.hash(dto.password, 12);
+    const user = await this.prisma.$transaction(async (transaction) => {
+      const createdUser = await transaction.user.create({
+        data: {
+          email,
+          name: dto.name,
+          passwordHash,
+          CustomerProfile: { create: { phone: dto.phone } },
+          UserRole: { create: { role: 'SHOP_OWNER' } },
+        },
+        include: { UserRole: true },
+      });
+      await transaction.shop.create({
+        data: {
+          ownerId: createdUser.id,
+          name: dto.name,
+          address: dto.address,
+          phone: dto.phone,
+          latitude: dto.latitude,
+          longitude: dto.longitude,
+        },
+      });
+      return createdUser;
+    });
+    return this.issueSession(user.id, user.email, user.UserRole.map((role) => role.role));
+  }
+
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() }, include: { UserRole: true } });
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email.trim().toLowerCase() }, include: { UserRole: true } });
     if (!user || user.suspended) throw new UnauthorizedException('Invalid email or password');
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) throw new UnauthorizedException('Invalid email or password');
@@ -58,20 +90,87 @@ export class AuthService {
     return { loggedOut: true };
   }
 
-  async resetRequest(_dto: ResetRequestDto) {
-    throw new ServiceUnavailableException('Password reset email delivery is not configured');
+  async resetRequest(dto: ResetRequestDto) {
+    const apiKey = process.env.RESEND_API_KEY;
+    const sender = process.env.EMAIL_FROM;
+    if (!apiKey || !sender) {
+      throw new ServiceUnavailableException('Password reset email delivery is not configured');
+    }
+    const resetUrl = new URL('/reset-password', this.getCustomerWebOrigin());
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email.trim().toLowerCase() },
+    });
+    if (!user || user.suspended) return { requested: true };
+
+    const rawToken = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    const tokenId = randomUUID();
+    await this.prisma.$transaction([
+      this.prisma.actionToken.updateMany({
+        where: { userId: user.id, purpose: 'RESET_PASSWORD', usedAt: null },
+        data: { usedAt: new Date() },
+      }),
+      this.prisma.actionToken.create({
+        data: {
+          id: tokenId,
+          userId: user.id,
+          tokenHash: sha256(rawToken),
+          purpose: 'RESET_PASSWORD',
+          expiresAt,
+        },
+      }),
+    ]);
+
+    resetUrl.searchParams.set('token', rawToken);
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: sender,
+          to: [user.email],
+          subject: 'Reset your QuickDoc password',
+          html: `<p>We received a request to reset your QuickDoc password.</p><p><a href="${resetUrl.toString()}">Choose a new password</a></p><p>This link expires in 30 minutes. If you did not request a reset, you can ignore this email.</p>`,
+        }),
+      });
+      if (!response.ok) throw new Error('Password reset email provider rejected the request');
+    } catch {
+      await this.prisma.actionToken.update({
+        where: { id: tokenId },
+        data: { usedAt: new Date() },
+      });
+      throw new ServiceUnavailableException('Password reset email could not be sent. Please try again later.');
+    }
+    return { requested: true };
   }
 
   async resetPassword(dto: ResetPasswordDto) {
     const tokenHash = sha256(dto.token);
-    const token = await this.prisma.actionToken.findUnique({ where: { tokenHash } });
-    if (!token || token.purpose !== 'RESET_PASSWORD' || token.usedAt || token.expiresAt <= new Date()) throw new BadRequestException('Reset token is invalid or expired');
     const passwordHash = await bcrypt.hash(dto.password, 12);
-    await this.prisma.$transaction([
-      this.prisma.user.update({ where: { id: token.userId }, data: { passwordHash } }),
-      this.prisma.actionToken.update({ where: { id: token.id }, data: { usedAt: new Date() } }),
-      this.prisma.refreshSession.updateMany({ where: { userId: token.userId, revokedAt: null }, data: { revokedAt: new Date() } }),
-    ]);
+    await this.prisma.$transaction(async (transaction) => {
+      const token = await transaction.actionToken.findUnique({ where: { tokenHash } });
+      if (!token || token.purpose !== 'RESET_PASSWORD' || token.usedAt || token.expiresAt <= new Date()) {
+        throw new BadRequestException('Reset token is invalid or expired');
+      }
+      const consumed = await transaction.actionToken.updateMany({
+        where: {
+          id: token.id,
+          purpose: 'RESET_PASSWORD',
+          usedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        data: { usedAt: new Date() },
+      });
+      if (consumed.count !== 1) throw new BadRequestException('Reset token is invalid or expired');
+      await transaction.user.update({ where: { id: token.userId }, data: { passwordHash } });
+      await transaction.refreshSession.updateMany({
+        where: { userId: token.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    });
     return { passwordReset: true };
   }
 

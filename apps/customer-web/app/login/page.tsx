@@ -54,8 +54,8 @@ export default function LoginPage() {
       setError('Enter a valid email address.');
       return;
     }
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters.');
+    if (!password) {
+      setError('Enter your password.');
       return;
     }
     try {
@@ -100,6 +100,7 @@ export default function LoginPage() {
           {error && <p className="auth-error" role="alert">{error}</p>}
           <button className="button button--primary auth-submit" type="submit">Sign in <span>→</span></button>
         </form>
+        <button className="auth-back" type="button" onClick={() => router.push('/forgot-password')}>Forgot password?</button>
         <p className="auth-legal">By continuing, you agree to our Terms and Privacy Policy.</p>
         <button className="auth-back" type="button" onClick={() => router.push('/register')}>New customer? Create an account</button>
       </section>

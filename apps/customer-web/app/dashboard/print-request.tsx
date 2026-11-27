@@ -30,12 +30,22 @@ type Shop = {
   id: string;
   name: string;
   address: string;
-  distanceKm: number;
+  distanceKm: number | null;
   rating: number;
   reviewCount: number;
   estimatedMinutes: number;
   services: { code: string; name: string; description: string; price: number }[];
   printPrices: { paperSize: string; colour: boolean; duplex: boolean; pricePerSide: number }[];
+};
+
+type CatalogDocument = {
+  id: string;
+  name: string;
+  description: string;
+  sizeBytes: number;
+  pageCount: number | null;
+  folder: { id: string; name: string } | null;
+  shop: { id: string; name: string; address: string; isOpen: boolean; distanceKm: number | null };
 };
 
 export type SavedDocument = {
@@ -131,6 +141,15 @@ export default function PrintRequestFlow({
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const [savedDocument, setSavedDocument] = useState<SavedDocument | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogDocuments, setCatalogDocuments] = useState<CatalogDocument[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState('');
+  const [catalogSelectionId, setCatalogSelectionId] = useState('');
+  const [catalogPreviewId, setCatalogPreviewId] = useState('');
+  const [customerLocation, setCustomerLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locationMessage, setLocationMessage] = useState('');
   const [config, setConfig] = useState<PrintConfiguration>({
     pages: 1,
     copies: 1,
@@ -168,11 +187,44 @@ export default function PrintRequestFlow({
   }, [file]);
 
   useEffect(() => {
+    if (!catalogOpen) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      setCatalogLoading(true);
+      setCatalogError('');
+      const query = new URLSearchParams({ search: catalogSearch.trim() });
+      if (customerLocation) {
+        query.set('lat', String(customerLocation.latitude));
+        query.set('lng', String(customerLocation.longitude));
+      }
+      fetch(`${apiBase()}/catalog/documents?${query}`, { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw await getApiError(response, 'Catalogue search failed');
+          return response.json() as Promise<{ data: CatalogDocument[] }>;
+        })
+        .then((result) => setCatalogDocuments(result.data))
+        .catch((cause: unknown) => {
+          if (cause instanceof DOMException && cause.name === 'AbortError') return;
+          setCatalogError(cause instanceof Error ? cause.message : 'Catalogue search failed.');
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setCatalogLoading(false);
+        });
+    }, 180);
+    return () => { window.clearTimeout(timeout); controller.abort(); };
+  }, [catalogOpen, catalogSearch, customerLocation]);
+
+  useEffect(() => {
     if (step < 2) return;
     const controller = new AbortController();
     setShopsLoading(true);
     setError('');
-    fetch(`${apiBase()}/shops?paperSize=${encodeURIComponent(config.paperSize)}&colour=${encodeURIComponent(config.colour)}`, { signal: controller.signal })
+    const query = new URLSearchParams({ paperSize: config.paperSize, colour: config.colour });
+    if (customerLocation) {
+      query.set('lat', String(customerLocation.latitude));
+      query.set('lng', String(customerLocation.longitude));
+    }
+    fetch(`${apiBase()}/shops?${query}`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw await getApiError(response, 'Eligible shops could not be loaded');
         return response.json() as Promise<{ data: Shop[] }>;
@@ -186,7 +238,7 @@ export default function PrintRequestFlow({
         if (!controller.signal.aborted) setShopsLoading(false);
       });
     return () => controller.abort();
-  }, [step, config.paperSize, config.colour]);
+  }, [step, config.paperSize, config.colour, customerLocation]);
 
   useEffect(() => {
     if (step !== 2 || !selectedShopId) return;
@@ -266,13 +318,76 @@ export default function PrintRequestFlow({
     setQuote(null);
   };
 
+  const requestCustomerLocation = () => {
+    setLocationMessage('');
+    if (!navigator.geolocation) {
+      setLocationMessage('Location is not available here. Search by document, shop, or area instead.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        setCustomerLocation({ latitude: coords.latitude, longitude: coords.longitude });
+        setLocationMessage('Showing the closest matching documents and shops first.');
+      },
+      () => setLocationMessage('Location access was not available. Search by document, shop, or area instead.'),
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
+    );
+  };
+
+  const previewCatalogDocument = async (catalogDocument: CatalogDocument) => {
+    const previewWindow = window.open('about:blank', '_blank');
+    if (!previewWindow) {
+      setCatalogError('Allow pop-ups to preview this catalogue PDF.');
+      return;
+    }
+    setCatalogPreviewId(catalogDocument.id);
+    setCatalogError('');
+    try {
+      const response = await fetch(`${apiBase()}/catalog/documents/${catalogDocument.id}/preview-url`);
+      if (!response.ok) throw await getApiError(response, 'Document preview could not be opened');
+      const result = await response.json() as { data: { previewUrl: string } };
+      previewWindow.location.replace(result.data.previewUrl);
+    } catch (cause) {
+      previewWindow.close();
+      setCatalogError(cause instanceof Error ? cause.message : 'Document preview could not be opened.');
+    } finally {
+      setCatalogPreviewId('');
+    }
+  };
+
+  const selectCatalogDocument = async (catalogDocument: CatalogDocument) => {
+    setCatalogSelectionId(catalogDocument.id);
+    setCatalogError('');
+    try {
+      const token = requireAccessToken();
+      const response = await fetch(`${apiBase()}/customer/catalog/${catalogDocument.id}/select`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw await getApiError(response, 'This catalogue document could not be selected');
+      const result = await response.json() as { data: SavedDocument };
+      setSavedDocument(result.data);
+      setFile(null);
+      setQuote(null);
+      if (result.data.pageCount) setConfig((current) => ({ ...current, pages: result.data.pageCount ?? current.pages }));
+      onDocumentSaved(result.data);
+      setCatalogOpen(false);
+    } catch (cause) {
+      setCatalogError(cause instanceof Error ? cause.message : 'This catalogue document could not be selected.');
+    } finally {
+      setCatalogSelectionId('');
+    }
+  };
+
+  const hasPrintDocument = Boolean(file || savedDocument);
+
   const updateConfig = <K extends keyof PrintConfiguration>(key: K, value: PrintConfiguration[K]) => {
     setConfig((current) => ({ ...current, [key]: value }));
     setQuote(null);
   };
 
   const requestQuote = async () => {
-    if (!configIsValid || !file) return;
+    if (!configIsValid || !hasPrintDocument) return;
     setQuoteState('loading');
     setQuote(null);
     setError('');
@@ -304,7 +419,10 @@ export default function PrintRequestFlow({
   };
 
   const uploadDocument = async (): Promise<SavedDocument> => {
-    if (!file) throw new Error('Choose a PDF before continuing.');
+    if (!file) {
+      if (savedDocument) return savedDocument;
+      throw new Error('Choose a PDF before continuing.');
+    }
     if (savedDocument && savedDocument.name === file.name && savedDocument.sizeBytes === file.size && savedDocument.pageCount === config.pages) {
       return savedDocument;
     }
@@ -346,7 +464,7 @@ export default function PrintRequestFlow({
   };
 
   const continueToShops = async () => {
-    if (!quote || !file || !configIsValid || Date.parse(quote.expiresAt) <= Date.now()) {
+    if (!quote || !hasPrintDocument || !configIsValid || Date.parse(quote.expiresAt) <= Date.now()) {
       setError('Choose a PDF, check the page and copy counts, and request a current quote.');
       return;
     }
@@ -437,7 +555,7 @@ export default function PrintRequestFlow({
                 }
               }}>
                 <span className="shop-card__mark"><Icon name="print" /></span>
-                <span className="shop-card__body"><strong>{shop.name}</strong><span>{shop.address} · {shop.distanceKm.toFixed(1)} km</span><span className="shop-card__meta">Rating {shop.rating} ({shop.reviewCount} reviews) · About {shop.estimatedMinutes} min</span>{printPrice && <span className="shop-card__meta">LKR {printPrice.pricePerSide.toFixed(2)} per printed side</span>}{shop.services.length > 0 && <span className="shop-card__meta">{shop.services.length} customer-selected add-on{shop.services.length === 1 ? '' : 's'}</span>}</span>
+                <span className="shop-card__body"><strong>{shop.name}</strong><span>{shop.address}{shop.distanceKm !== null ? ` · ${shop.distanceKm.toFixed(1)} km` : ''}</span><span className="shop-card__meta">Rating {shop.rating} ({shop.reviewCount} reviews) · About {shop.estimatedMinutes} min</span>{printPrice && <span className="shop-card__meta">LKR {printPrice.pricePerSide.toFixed(2)} per printed side</span>}{shop.services.length > 0 && <span className="shop-card__meta">{shop.services.length} customer-selected add-on{shop.services.length === 1 ? '' : 's'}</span>}</span>
                 <span className="shop-card__check">{selectedShopId === shop.id ? 'Selected' : 'Choose'}</span>
               </button>;
             })}
@@ -465,7 +583,7 @@ export default function PrintRequestFlow({
             <span>{config.pages} pages · {config.copies} {config.copies === 1 ? 'copy' : 'copies'}</span>
             <div className="summary-rule" />
             <small>{config.paperSize} · {config.colour === 'COLOUR' ? 'Colour' : 'Black & white'} · {config.sides === 'DUPLEX' ? 'Double-sided' : 'Single-sided'}</small>
-            {file && <div className="checkout-document"><Icon name="file" /><span><strong>{file.name}</strong><small>PDF stored privately</small></span></div>}
+            {(savedDocument || file) && <div className="checkout-document"><Icon name="file" /><span><strong>{savedDocument?.name ?? file?.name}</strong><small>PDF stored privately</small></span></div>}
             {error && <p className="flow-error" role="alert">{error}</p>}
             <button className="button button--primary" type="button" disabled={!selectedShopId || !quote || quoteState === 'loading'} onClick={() => { setError(''); setStep(3); }}>Continue to delivery <Icon name="arrow" /></button>
           </aside>
@@ -500,7 +618,7 @@ export default function PrintRequestFlow({
             {quote?.shopServices?.map((service) => <span className="shop-summary__service" key={service.code}>{service.name} · LKR {service.price.toFixed(2)}</span>)}
             <div className="summary-rule" />
             <small>{config.pages} pages · {config.copies} copies · {config.paperSize} · {config.deliverySpeed === 'EXPRESS' ? 'Express delivery' : 'Standard delivery'}</small>
-            {file && <div className="checkout-document"><Icon name="file" /><span><strong>{file.name}</strong><small>PDF · {Math.ceil(file.size / 1024)} KB</small></span></div>}
+            {(savedDocument || file) && <div className="checkout-document"><Icon name="file" /><span><strong>{savedDocument?.name ?? file?.name}</strong><small>PDF · {Math.ceil((savedDocument?.sizeBytes ?? file?.size ?? 0) / 1024)} KB</small></span></div>}
           </aside>
         </div>
       </section>
@@ -514,8 +632,24 @@ export default function PrintRequestFlow({
       <Stepper step={1} />
       <div className="request-layout">
         <div className="panel request-form">
+          <div className="document-source-tabs" role="tablist" aria-label="Choose a document source">
+            <button type="button" role="tab" aria-selected={!catalogOpen} className={!catalogOpen ? 'selected' : ''} onClick={() => { setCatalogOpen(false); setError(''); }}>Upload your PDF</button>
+            <button type="button" role="tab" aria-selected={catalogOpen} className={catalogOpen ? 'selected' : ''} onClick={() => { setCatalogOpen(true); setError(''); }}>Browse shop catalogue</button>
+          </div>
+          {catalogOpen ? <div className="catalog-browser">
+            <h2>Find a document to print</h2>
+            <p className="form-copy">Search published papers and forms across approved shops, then choose a PDF to add to your print request.</p>
+            <div className="catalog-search-row"><label className="field-label">Search documents, folders, shops or areas<input type="search" value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} placeholder="e.g. Grade 10 science, past papers, Colombo" /></label><button className="button button--secondary" type="button" onClick={requestCustomerLocation}>Use my location</button></div>
+            {locationMessage && <p className="catalog-location-message" role="status">{locationMessage}</p>}
+            {catalogError && <p className="flow-error" role="alert">{catalogError}</p>}
+            {catalogLoading ? <div className="catalog-results-loading" role="status">Searching shop catalogues…</div> : catalogDocuments.length ? <div className="catalog-results">{catalogDocuments.map((catalogDocument) => <article className="catalog-result" key={catalogDocument.id}>
+              <span className="catalog-result-mark">PDF</span>
+              <div className="catalog-result-copy"><strong>{catalogDocument.name}</strong><span>{catalogDocument.folder?.name ?? 'Shop catalogue'} · {catalogDocument.shop.name}</span><small>{catalogDocument.shop.address}{catalogDocument.shop.distanceKm !== null ? ` · ${catalogDocument.shop.distanceKm} km away` : ''}</small>{catalogDocument.description && <small>{catalogDocument.description}</small>}<small>{catalogDocument.pageCount ? `${catalogDocument.pageCount} pages · ` : ''}{Math.ceil(catalogDocument.sizeBytes / 1024)} KB · {catalogDocument.shop.isOpen ? 'Accepting orders' : 'Currently closed'}</small></div>
+              <div className="catalog-result-actions"><button className="text-button" type="button" disabled={catalogPreviewId === catalogDocument.id} onClick={() => void previewCatalogDocument(catalogDocument)}>{catalogPreviewId === catalogDocument.id ? 'Opening…' : 'Preview'}</button><button className="button button--primary button--small" type="button" disabled={!catalogDocument.shop.isOpen || Boolean(catalogSelectionId)} onClick={() => void selectCatalogDocument(catalogDocument)}>{catalogSelectionId === catalogDocument.id ? 'Adding…' : 'Select to print'}</button></div>
+            </article>)}</div> : <div className="empty-panel"><h3>No matching documents</h3><p>Try a different search or ask a nearby shop to add the document you need.</p></div>}
+          </div> : <>
           <h2>Upload your PDF</h2><p className="form-copy">Your document stays private. It is shared with the selected shop only after you place a request.</p>
-          {file ? (
+          {savedDocument && !file ? <div className="uploaded-file"><span className="uploaded-file__icon"><Icon name="file" /></span><span><strong>{savedDocument.name}</strong><small>Private copy added from a shop catalogue</small></span><button type="button" aria-label="Remove selected catalogue document" onClick={() => { setSavedDocument(null); setQuote(null); setError(''); }}>×</button></div> : file ? (
             <div className="pdf-uploaded">
               <div className="uploaded-file"><span className="uploaded-file__icon"><Icon name="file" /></span><span><strong>{file.name}</strong><small>{Math.ceil(file.size / 1024)} KB · PDF ready to preview</small></span><button type="button" aria-label="Remove PDF" disabled={busy || quoteState === 'loading'} onClick={() => { setFile(null); setSavedDocument(null); setQuote(null); setError(''); }}>×</button></div>
               {previewUrl && <div className="pdf-preview"><div className="pdf-preview__bar"><strong>Document preview</strong><a href={previewUrl} target="_blank" rel="noreferrer">Open full preview</a></div><iframe title={`Preview of ${file.name}`} src={previewUrl} /></div>}
@@ -531,11 +665,12 @@ export default function PrintRequestFlow({
             <label className="field-label">Sides<select disabled={busy || quoteState === 'loading'} value={config.sides} onChange={(event) => updateConfig('sides', event.target.value)}><option value="SINGLE">Single-sided</option><option value="DUPLEX">Double-sided</option></select></label>
             <label className="field-label">Delivery<select disabled={busy || quoteState === 'loading'} value={config.deliverySpeed} onChange={(event) => updateConfig('deliverySpeed', event.target.value)}><option value="STANDARD">Standard</option><option value="EXPRESS">Express</option></select></label>
             <div className="option-toggles"><label><input type="checkbox" disabled={busy || quoteState === 'loading'} checked={config.binding} onChange={(event) => updateConfig('binding', event.target.checked)} /> Binding</label><label><input type="checkbox" disabled={busy || quoteState === 'loading'} checked={config.stapling} onChange={(event) => updateConfig('stapling', event.target.checked)} /> Stapling</label><label><input type="checkbox" disabled={busy || quoteState === 'loading'} checked={config.lamination} onChange={(event) => updateConfig('lamination', event.target.checked)} /> Lamination</label></div>
-            <button className="button button--secondary quote-button" type="button" disabled={!file || !configIsValid || quoteState === 'loading'} onClick={requestQuote}>{quoteState === 'loading' ? 'Calculating live quote…' : 'Get live quote'} <Icon name="arrow" /></button>
+            <button className="button button--secondary quote-button" type="button" disabled={!hasPrintDocument || !configIsValid || quoteState === 'loading'} onClick={requestQuote}>{quoteState === 'loading' ? 'Calculating live quote…' : 'Get live quote'} <Icon name="arrow" /></button>
             {quoteState === 'error' && !error && <p className="quote-error">The pricing service is unavailable. Check your connection and try again.</p>}
             {quote && <div className="quote-result"><span><strong>{quote.currency} {quote.total.toFixed(2)}</strong><small>{quote.sheets} physical sheets · Expires {new Date(quote.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small></span><span className="quote-result__ready">Live quote</span></div>}
           </div>
-          <div className="form-actions"><button className="button button--primary" type="button" disabled={!quote || !file || !configIsValid || busy} onClick={continueToShops}>{busy ? 'Uploading PDF securely…' : 'Continue to shops'} <Icon name="arrow" /></button><button className="button button--quiet" type="button" disabled={busy} onClick={onBack}>Return to dashboard</button></div>
+          <div className="form-actions"><button className="button button--primary" type="button" disabled={!quote || !hasPrintDocument || !configIsValid || busy} onClick={continueToShops}>{busy ? file ? 'Uploading PDF securely…' : 'Preparing document…' : 'Continue to shops'} <Icon name="arrow" /></button><button className="button button--quiet" type="button" disabled={busy} onClick={onBack}>Return to dashboard</button></div>
+          </>}
         </div>
         <aside className="request-aside"><div className="trust-note"><span className="trust-note__icon"><Icon name="shield" /></span><strong>Private by design</strong><p>Your PDF is stored in a private bucket. Shops receive short-lived access only for orders you place.</p></div><div className="request-help"><span>Need help?</span><button type="button" disabled={busy} onClick={onBack}>Return to dashboard</button></div></aside>
       </div>
