@@ -16,7 +16,7 @@ import {
   S3ServiceException,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { PDFDocument } from 'pdf-lib';
@@ -120,6 +120,10 @@ export class PrivateObjectStorageService {
     const endpoint = this.setting(STORAGE_SETTING_NAMES.endpoint);
     const forcePathStyle = this.config.get<string>('S3_FORCE_PATH_STYLE');
     this.client = new S3Client({
+      // Only add checksums where S3 requires them. Recent SDK versions otherwise attach
+      // checksum parameters that S3-compatible services and signed links reject.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
       region,
       endpoint,
       forcePathStyle: forcePathStyle ? forcePathStyle === 'true' : Boolean(endpoint),
@@ -147,7 +151,22 @@ export class PrivateObjectStorageService {
     if (configuredSecret && Buffer.byteLength(configuredSecret) < 32) {
       throw new ServiceUnavailableException('Local storage signing secret must be at least 32 bytes');
     }
-    return configuredSecret ? Buffer.from(configuredSecret) : this.ephemeralSigningSecret;
+    if (configuredSecret) return Buffer.from(configuredSecret);
+    // Derive a stable key so upload links keep working across restarts and instances.
+    const root = this.config.get<string>('DATA_ENCRYPTION_KEY') ?? this.config.get<string>('JWT_SECRET') ?? process.env.JWT_SECRET;
+    return root
+      ? Buffer.from(hkdfSync('sha256', root, 'quickdoc', 'quickdoc:storage-links:v1', 32))
+      : this.ephemeralSigningSecret;
+  }
+
+  /** Public base URL of this API, used for upload links that browsers send PDFs to. */
+  private apiBaseUrl(): string {
+    const renderUrl = this.config.get<string>('RENDER_EXTERNAL_URL');
+    const base = this.config.get<string>('LOCAL_STORAGE_BASE_URL')
+      ?? this.config.get<string>('API_PUBLIC_URL')
+      ?? (renderUrl ? `${renderUrl.replace(/\/+$/, '')}/api/v1` : undefined)
+      ?? `http://localhost:${this.config.get<string>('API_PORT') ?? '3001'}/api/v1`;
+    return base.replace(/\/+$/, '');
   }
 
   private createLocalToken(token: LocalStorageToken): string {
@@ -192,32 +211,31 @@ export class PrivateObjectStorageService {
   }
 
   private localUrl(token: LocalStorageToken): string {
-    const baseUrl = this.config.get<string>('LOCAL_STORAGE_BASE_URL')
-      ?? `http://localhost:${this.config.get<string>('API_PORT') ?? '3001'}/api/v1`;
-    return `${baseUrl.replace(/\/+$/, '')}/storage/local/${this.createLocalToken(token)}`;
+    return `${this.apiBaseUrl()}/storage/local/${this.createLocalToken(token)}`;
   }
 
+  /**
+   * Upload links always point at this API rather than straight at the bucket. Browsers then
+   * only talk to an origin that already allows the portals (no bucket CORS needed), and the
+   * API validates the PDF before it is stored privately.
+   */
   async createUploadUrl(objectKey: string): Promise<string> {
-    if (this.driver === 'local') {
-      this.localObjectPath(objectKey);
-      return this.localUrl({
-        objectKey,
-        operation: 'upload',
-        expiresAt: Math.floor(Date.now() / 1000) + 300,
-      });
+    if (!CUSTOMER_PDF_KEY.test(objectKey) && !SHOP_CATALOG_PDF_KEY.test(objectKey)) {
+      throw new BadRequestException('Private document key is invalid');
     }
-    const command = new PutObjectCommand({
-      Bucket: this.bucket,
-      Key: objectKey,
-      ContentType: 'application/pdf',
-    });
-    return getSignedUrl(this.getClient(), command, { expiresIn: 300 });
+    // Fail fast when the configured backend is unusable (missing path or bucket settings).
+    if (this.driver === 'local') this.localObjectPath(objectKey);
+    else void this.bucket;
+    const token = this.createLocalToken({ objectKey, operation: 'upload', expiresAt: Math.floor(Date.now() / 1000) + 300 });
+    return `${this.apiBaseUrl()}/storage/upload/${token}`;
   }
 
+  /** Kept for the original local-storage route. */
   async writeLocalUpload(token: string, contentType: string | undefined, body: Buffer): Promise<void> {
-    if (this.driver !== 'local') {
-      throw new ServiceUnavailableException('Local document storage is disabled');
-    }
+    return this.writeUpload(token, contentType, body);
+  }
+
+  async writeUpload(token: string, contentType: string | undefined, body: Buffer): Promise<void> {
     const { objectKey } = this.verifyLocalToken(token, 'upload');
     if (contentType?.split(';', 1)[0].trim().toLowerCase() !== 'application/pdf') {
       throw new BadRequestException('Only PDF documents are supported');
@@ -227,6 +245,26 @@ export class PrivateObjectStorageService {
     }
     if (body.subarray(0, 5).toString('ascii') !== '%PDF-') {
       throw new BadRequestException('The uploaded file is not a valid PDF');
+    }
+
+    if (this.driver === 's3') {
+      const client = this.getClient();
+      const exists = await client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: objectKey }))
+        .then(() => true)
+        .catch((error: unknown) => {
+          if (error instanceof S3ServiceException && error.$metadata.httpStatusCode === 404) return false;
+          if ((error as { name?: string }).name === 'NotFound') return false;
+          throw error;
+        });
+      if (exists) throw new ConflictException('This upload link has already been used');
+      await client.send(new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: objectKey,
+        Body: body,
+        ContentType: 'application/pdf',
+        ContentLength: body.length,
+      }));
+      return;
     }
 
     const path = this.localObjectPath(objectKey);

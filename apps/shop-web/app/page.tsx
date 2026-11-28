@@ -179,6 +179,21 @@ async function api<T>(path: string, options: RequestInit & { json?: unknown } = 
   return response.json() as Promise<T>;
 }
 
+/** Sends a PDF to its private upload link and turns failures into messages people can act on. */
+async function uploadPdf(uploadUrl: string, file: File): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/pdf' }, body: file });
+  } catch {
+    throw new Error('We couldn’t reach QuickDoc to upload your PDF. Check your internet connection and try again.');
+  }
+  if (!response.ok) {
+    const result = await response.json().catch(() => null) as { message?: string | string[] } | null;
+    const message = Array.isArray(result?.message) ? result?.message.join(' ') : result?.message;
+    throw new Error(message || `The PDF could not be uploaded (error ${response.status}). Try again.`);
+  }
+}
+
 function useRemote<T>(path: string, initial: T) {
   const [data, setData] = useState(initial);
   const [pagination, setPagination] = useState<{ page: number; pageSize: number; total: number; totalPages: number } | null>(null);
@@ -852,12 +867,7 @@ function CatalogPage() {
         method: 'POST',
         json: { name: file.name, mimeType: 'application/pdf', sizeBytes: file.size },
       });
-      const putResponse = await fetch(upload.data.uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/pdf' },
-        body: file,
-      });
-      if (!putResponse.ok) throw new Error('The PDF could not be uploaded to private storage. Check bucket CORS settings and try again.');
+      await uploadPdf(upload.data.uploadUrl, file);
       await api('/shop/me/catalog/documents', {
         method: 'POST',
         json: {

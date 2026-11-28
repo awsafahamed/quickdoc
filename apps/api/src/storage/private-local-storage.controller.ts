@@ -45,3 +45,23 @@ export class PrivateLocalStorageController {
       .send(document.body);
   }
 }
+
+/** Receives browser uploads for every storage backend and stores them privately. */
+@Controller('storage/upload')
+export class PrivateUploadController {
+  constructor(private readonly storage: PrivateObjectStorageService) {}
+
+  @Put(':token')
+  async upload(
+    @Param('token') token: string,
+    @Req() request: Request,
+    @Res() response: Response,
+  ): Promise<void> {
+    const body: unknown = request.body;
+    if (!Buffer.isBuffer(body)) {
+      throw new BadRequestException('PDF upload body is missing or larger than 25 MB');
+    }
+    await this.storage.writeUpload(token, request.get('content-type'), body);
+    response.status(204).end();
+  }
+}

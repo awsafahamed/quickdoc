@@ -86,19 +86,12 @@ The API accepts either naming style for the storage variables:
 - `AWS_ACCESS_KEY_ID` or `S3_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY` or `S3_SECRET_ACCESS_KEY`
 
-Browsers upload PDFs straight to the bucket with short-lived signed links, so the bucket also needs:
+Browsers upload PDFs to the QuickDoc API, not straight to the bucket. The API checks that each file is a real PDF under 25 MB and stores it privately in S3. The upload link points at the API's public URL, which Render provides automatically as `RENDER_EXTERNAL_URL`; set `API_PUBLIC_URL` on other hosts. Previews are short-lived signed S3 links that open in a new tab.
 
-1. **Block all public access** turned on. Every file is served through signed links only.
-2. **CORS**, in the bucket's Permissions tab, so the portals can upload:
-   ```json
-   [{
-     "AllowedOrigins": ["https://customer-web-murex-seven.vercel.app", "https://shop-web-gray.vercel.app"],
-     "AllowedMethods": ["PUT", "GET"],
-     "AllowedHeaders": ["Content-Type"],
-     "MaxAgeSeconds": 3000
-   }]
-   ```
-3. **An IAM user policy** allowing `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::<bucket>/private/*`.
+As a result, the bucket needs no CORS rules. It does need:
+
+1. **Block all public access** turned on.
+2. **An IAM user policy** allowing `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::<bucket>/private/*`. `s3:GetObject` also covers the HeadObject check, and CopyObject needs `s3:GetObject` plus `s3:PutObject`.
 
 ## Order lifecycle and money flow
 

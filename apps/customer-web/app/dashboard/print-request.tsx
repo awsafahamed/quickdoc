@@ -84,6 +84,21 @@ function apiBase(): string {
   return (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1').replace(/\/+$/, '');
 }
 
+/** Sends a PDF to its private upload link and turns failures into messages people can act on. */
+async function uploadPdf(uploadUrl: string, file: File): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/pdf' }, body: file });
+  } catch {
+    throw new Error('We couldn’t reach QuickDoc to upload your PDF. Check your internet connection and try again.');
+  }
+  if (!response.ok) {
+    const result = await response.json().catch(() => null) as { message?: string | string[] } | null;
+    const message = Array.isArray(result?.message) ? result?.message.join(' ') : result?.message;
+    throw new Error(message || `The PDF could not be uploaded (error ${response.status}). Try again.`);
+  }
+}
+
 function requireAccessToken(): string {
   const token = window.sessionStorage.getItem('print-attest-access-token');
   // Without an access token the session interceptor renews it from the stored refresh token.
@@ -354,7 +369,9 @@ export default function PrintRequestFlow({
       await uploadDocument(selectedFile);
     } catch (cause) {
       setFile(null);
-      setError(cause instanceof Error ? cause.message : 'The PDF could not be uploaded. Try again.');
+      setError(cause instanceof TypeError
+        ? 'We couldn’t reach QuickDoc to upload your PDF. Check your internet connection and try again in a moment.'
+        : cause instanceof Error ? cause.message : 'The PDF could not be uploaded. Try again.');
     } finally {
       setBusy(false);
     }
@@ -479,14 +496,7 @@ export default function PrintRequestFlow({
     });
     if (!uploadRequest.ok) throw await getApiError(uploadRequest, 'Secure upload could not be started');
     const upload = await uploadRequest.json() as { data: { objectKey: string; uploadUrl: string } };
-    const putResponse = await fetch(upload.data.uploadUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/pdf' },
-      body: file,
-    });
-    if (!putResponse.ok) {
-      throw new Error('The PDF could not be uploaded to private storage. Check the bucket CORS settings and try again.');
-    }
+    await uploadPdf(upload.data.uploadUrl, file);
 
     const saveResponse = await fetch(`${api}/customer/documents`, {
       method: 'POST',
