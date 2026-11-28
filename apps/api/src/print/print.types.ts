@@ -30,6 +30,9 @@ export interface PrintQuoteRequest {
   lamination: boolean;
   deliverySpeed: DeliverySpeed;
   deliveryDistanceKm: number;
+  /** When set together with shopId, the delivery distance is computed from the shop location. */
+  deliveryLatitude?: number;
+  deliveryLongitude?: number;
   shopId?: string;
   shopServiceCodes?: string[];
 }
@@ -55,4 +58,5 @@ export interface PrintQuoteBreakdown {
   quoteId: string;
   expiresAt: string;
   sheets: number;
+  deliveryDistanceKm: number;
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './styles.css';
+import { SessionRefresh } from './session-refresh';
 
 export const metadata: Metadata = {
   title: 'QuickDoc Rider',
@@ -7,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en"><body><SessionRefresh access="rider-access-token" refresh="rider-refresh-token" signInPath="/" />{children}</body></html>;
 }

@@ -426,3 +426,21 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .shop-toolbar span { text-align: right; }
   .document-actions { gap: 10px; }
 }
+
+/* Order actions, delivery PIN and reviews */
+.order-row { flex-wrap: wrap; }
+.order-row__details small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+.order-row__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: 8px; }
+.delivery-pin { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 8px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 10px; font-size: 12px; }
+.delivery-pin strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 18px; letter-spacing: 0.18em; color: var(--ink); }
+.delivery-pin small { flex-basis: 100%; margin: 0; }
+.review-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.review-form input { min-width: 160px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+.star { padding: 0 2px; border: 0; background: none; color: var(--line); font-size: 20px; cursor: pointer; }
+.star--on { color: #d99a00; }
+.star:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+@media (max-width: 680px) { .order-row__actions { width: 100%; margin-left: 0; } }
+.delivery-location { display: grid; gap: 6px; margin: 4px 0 18px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.delivery-location span, .delivery-location small { color: var(--muted); font-size: 13px; }
+.delivery-location .button { justify-self: start; }
+.field-label small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }

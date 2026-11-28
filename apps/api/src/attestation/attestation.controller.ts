@@ -1,9 +1,12 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Get,
   NotFoundException,
+  Param,
+  ParseUUIDPipe,
   Post,
   Query,
   Req,
@@ -178,6 +181,7 @@ export class AttestationController {
       },
       select: {
         id: true,
+        userId: true,
         businessName: true,
         services: {
           where: { ...serviceFilter, enabled: true, reviewStatus: 'APPROVED' },
@@ -254,10 +258,56 @@ export class AttestationController {
           note: `Pickup scheduled for ${dto.pickupDate} (${dto.pickupSlot})`,
         },
       });
+      await transaction.notification.create({
+        data: {
+          id: randomUUID(),
+          userId: agent.userId,
+          title: 'New attestation booking',
+          body: `Booking ${reference} (${offer.name}) has pickup scheduled for ${dto.pickupDate}, ${dto.pickupSlot}.`,
+          createdAt: new Date(),
+        },
+      });
       return created;
     });
 
     return { data: booking };
+  }
+
+  @Post('me/jobs/:id/cancel')
+  @UseGuards(AuthGuard('jwt'))
+  async cancelBooking(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() request: { user: { id: string } },
+  ) {
+    const job = await this.prisma.attestationJob.findFirst({
+      where: { id, customerId: request.user.id },
+      include: { agent: { select: { userId: true } } },
+    });
+    if (!job) throw new NotFoundException('Booking was not found');
+    const cancelled = await this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.attestationJob.updateMany({
+        where: { id, customerId: request.user.id, status: 'PICKUP_SCHEDULED' },
+        data: { status: 'CANCELLED', cancelledAt: new Date() },
+      });
+      if (updated.count !== 1) return false;
+      await transaction.custodyEvent.create({
+        data: { id: randomUUID(), jobId: id, eventType: 'CANCELLED', actorId: request.user.id, note: 'Cancelled by customer before collection' },
+      });
+      await transaction.notification.create({
+        data: {
+          id: randomUUID(),
+          userId: job.agent.userId,
+          title: 'Booking cancelled',
+          body: `The customer cancelled attestation booking ${job.reference} before collection.`,
+          createdAt: new Date(),
+        },
+      });
+      return true;
+    });
+    if (!cancelled) {
+      throw new ConflictException('This booking can no longer be cancelled because the documents have been collected. Contact support for help.');
+    }
+    return { data: { id, reference: job.reference, status: 'CANCELLED' } };
   }
 
   @Get('me/jobs')

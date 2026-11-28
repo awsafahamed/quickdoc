@@ -44,6 +44,7 @@ describe('AttestationController customer bookings', () => {
           Promise.resolve({ ...createdBooking, id: data.id })),
       },
       custodyEvent: { create: jest.fn().mockResolvedValue({ id: 'event-id' }) },
+      notification: { create: jest.fn() },
     };
     const prisma = {
       platformCatalogService: {
@@ -52,6 +53,7 @@ describe('AttestationController customer bookings', () => {
       agentProfile: {
         findFirst: jest.fn().mockResolvedValue({
           id: bookingDto.agentId,
+          userId: 'agent-user-id',
           services: [{
             code: service.code,
             name: 'Degree Attestation',

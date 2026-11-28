@@ -6,7 +6,7 @@ import { PrivateObjectStorageService } from '../src/storage/private-object-stora
 describe('shop staff role assignment', () => {
   it('does not grant shop-owner access to an existing customer', async () => {
     const prisma = {
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', status: 'APPROVED' }) },
       user: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'customer-id',
@@ -30,7 +30,7 @@ describe('shop order document previews', () => {
   it('signs a preview URL only for a document attached to this shop order', async () => {
     const document = { objectKey: 'private/customers/customer-id/file.pdf', name: 'file.pdf' };
     const prisma = {
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', status: 'APPROVED' }) },
       order: { findFirst: jest.fn().mockResolvedValue({ OrderItem: [{ Document: document }] }) },
     } as unknown as PrismaService;
     const storage = { createPreviewUrl: jest.fn().mockResolvedValue('https://private-storage.test/preview') } as unknown as PrivateObjectStorageService;
@@ -51,7 +51,7 @@ describe('shop order document previews', () => {
 
   it('does not create a preview URL when the document is not on the shop order', async () => {
     const prisma = {
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', status: 'APPROVED' }) },
       order: { findFirst: jest.fn().mockResolvedValue({ OrderItem: [] }) },
     } as unknown as PrismaService;
     const storage = { createPreviewUrl: jest.fn() } as unknown as PrivateObjectStorageService;
@@ -69,7 +69,7 @@ describe('shop order document previews', () => {
 describe('shop order transitions', () => {
   it('rejects a status jump that skips the production workflow', async () => {
     const prisma = {
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', status: 'APPROVED' }) },
       order: { findFirst: jest.fn().mockResolvedValue({ id: 'order-id', status: 'PENDING_ACCEPTANCE' }) },
       $transaction: jest.fn(),
     } as unknown as PrismaService;
@@ -86,7 +86,7 @@ describe('shop order transitions', () => {
 
   it('requires a reason to decline a customer order', async () => {
     const prisma = {
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', status: 'APPROVED' }) },
       order: { findFirst: jest.fn().mockResolvedValue({ id: 'order-id', status: 'PENDING_ACCEPTANCE' }) },
       $transaction: jest.fn(),
     } as unknown as PrismaService;
@@ -107,7 +107,7 @@ describe('shop-defined service offers', () => {
 
   it('creates custom services as pending admin review', async () => {
     const prisma = {
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', status: 'APPROVED' }) },
       shopService: {
         findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'offer-id' }),
@@ -138,7 +138,7 @@ describe('shop-defined service offers', () => {
 
   it('rejects duplicate custom offer codes', async () => {
     const prisma = {
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', status: 'APPROVED' }) },
       shopService: { findUnique: jest.fn().mockResolvedValue({ id: 'existing-offer' }) },
     } as unknown as PrismaService;
     const controller = new ShopPortalController(prisma, {} as PrivateObjectStorageService);
@@ -151,7 +151,7 @@ describe('shop-defined service offers', () => {
 
   it('rejects duplicate pricing combinations before writing', async () => {
     const prisma = {
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', status: 'APPROVED' }) },
       $transaction: jest.fn(),
     } as unknown as PrismaService;
     const controller = new ShopPortalController(prisma, {} as PrivateObjectStorageService);

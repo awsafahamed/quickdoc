@@ -8,6 +8,11 @@ import { LoginDto, RegisterDto, ResetPasswordDto, ResetRequestDto, OtpRequestDto
 
 export type RegistrationRole = 'CUSTOMER' | 'SHOP_OWNER' | 'RIDER' | 'AGENT';
 
+// bcrypt hash of a random value; used only to keep failed-login timing constant.
+const DUMMY_PASSWORD_HASH = '$2b$12$rNlXEmfDi4PdUUPywvwr3.YhcMWrDE1gaAGGGPpLE0qR/v/tnLr9e';
+
+const REFRESH_REUSE_GRACE_MS = 30_000;
+
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -71,18 +76,44 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const user = await this.prisma.user.findUnique({ where: { email: dto.email.trim().toLowerCase() }, include: { UserRole: true } });
-    if (!user || user.suspended) throw new UnauthorizedException('Invalid email or password');
-    const valid = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!valid) throw new UnauthorizedException('Invalid email or password');
+    // Always run one bcrypt comparison so response time does not reveal whether an email is registered.
+    const valid = await bcrypt.compare(dto.password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+    if (!user || user.suspended || !valid) throw new UnauthorizedException('Invalid email or password');
     return this.issueSession(user.id, user.email, user.UserRole.map((role) => role.role));
   }
 
   async refresh(refreshToken: string) {
     const tokenHash = sha256(refreshToken);
     const session = await this.prisma.refreshSession.findUnique({ where: { tokenHash }, include: { User: { include: { UserRole: true } } } });
-    if (!session || session.revokedAt || session.expiresAt <= new Date()) throw new UnauthorizedException('Refresh session is invalid or expired');
-    await this.prisma.refreshSession.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
-    return this.issueSession(session.userId, session.User.email, session.User.UserRole.map((role) => role.role));
+    if (!session) throw new UnauthorizedException('Refresh session is invalid or expired');
+    if (session.revokedAt) {
+      // Parallel requests and multiple tabs legitimately race to refresh with the same token.
+      // Inside a short grace window the loser is simply refused; later replays are treated as
+      // theft and end every session in this family.
+      if (Date.now() - session.revokedAt.getTime() < REFRESH_REUSE_GRACE_MS) {
+        throw new UnauthorizedException('Refresh session is invalid or expired');
+      }
+      await this.prisma.refreshSession.updateMany({
+        where: { userId: session.userId, familyId: session.familyId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      throw new UnauthorizedException('Refresh session is invalid or expired');
+    }
+    if (session.expiresAt <= new Date() || session.User.suspended) {
+      throw new UnauthorizedException('Refresh session is invalid or expired');
+    }
+    // Rotate atomically so two concurrent refreshes cannot both mint new sessions.
+    const rotated = await this.prisma.refreshSession.updateMany({
+      where: { id: session.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    if (rotated.count !== 1) throw new UnauthorizedException('Refresh session is invalid or expired');
+    return this.issueSession(
+      session.userId,
+      session.User.email,
+      session.User.UserRole.map((role) => role.role),
+      session.familyId,
+    );
   }
 
   async logout(refreshToken: string) {
@@ -178,14 +209,10 @@ export class AuthService {
     throw new ServiceUnavailableException('Phone verification delivery is not configured');
   }
 
-  async verifyOtp(dto: OtpVerifyDto) {
-    const tokenHash = sha256(dto.phone + ':' + dto.code);
-    const token = await this.prisma.actionToken.findUnique({ where: { tokenHash } });
-    if (!token || token.usedAt || token.expiresAt <= new Date()) throw new UnauthorizedException('OTP is invalid or expired');
-    await this.prisma.actionToken.update({ where: { id: token.id }, data: { usedAt: new Date() } });
-    const user = await this.prisma.user.findUnique({ where: { id: token.userId }, include: { UserRole: true } });
-    if (!user) throw new UnauthorizedException('User not found');
-    return this.issueSession(user.id, user.email, user.UserRole.map((role) => role.role));
+  async verifyOtp(_dto: OtpVerifyDto) {
+    // No SMS provider is configured, so no OTP can have been issued. Keep this closed rather
+    // than accepting tokens that were never delivered through a verified channel.
+    throw new ServiceUnavailableException('Phone verification delivery is not configured');
   }
 
   createGoogleOAuthState() {
@@ -256,10 +283,22 @@ export class AuthService {
         include: { UserRole: true },
       });
     } else if (!existingUser.emailVerified) {
-      user = await this.prisma.user.update({
-        where: { id: existingUser.id },
-        data: { emailVerified: true },
-        include: { UserRole: true },
+      // Someone registered this address with a password but never proved they own it.
+      // Google has now proved ownership, so invalidate that unverified password and any
+      // sessions created with it before handing the account to the verified owner.
+      user = await this.prisma.$transaction(async (transaction) => {
+        await transaction.refreshSession.updateMany({
+          where: { userId: existingUser.id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        return transaction.user.update({
+          where: { id: existingUser.id },
+          data: {
+            emailVerified: true,
+            passwordHash: await bcrypt.hash(randomBytes(32).toString('hex'), 12),
+          },
+          include: { UserRole: true },
+        });
       });
     }
     if (!user) throw new UnauthorizedException('Google account could not be resolved');
@@ -307,17 +346,9 @@ export class AuthService {
     return redirect.toString();
   }
 
-  private async findOrCreateOtpUser(phone: string) {
-    const profile = await this.prisma.customerProfile.findFirst({ where: { phone } });
-    if (profile) return this.prisma.user.findUniqueOrThrow({ where: { id: profile.userId } });
-    const randomEmail = `phone-${phone.replace(/\D/g, '')}@local.invalid`;
-    return this.prisma.user.create({ data: { email: randomEmail, name: 'Customer', passwordHash: await bcrypt.hash(randomBytes(32).toString('hex'), 12), CustomerProfile: { create: { phone } }, UserRole: { create: { role: 'CUSTOMER' } } } });
-  }
-
-  private async issueSession(userId: string, email: string, roles: string[]) {
+  private async issueSession(userId: string, email: string, roles: string[], familyId: string = randomUUID()) {
     const accessToken = await this.jwt.signAsync({ sub: userId, email, roles }, { secret: process.env.JWT_SECRET, expiresIn: '15m' });
     const refreshToken = randomBytes(48).toString('hex');
-    const familyId = randomUUID();
     await this.prisma.refreshSession.create({ data: { id: randomUUID(), userId, tokenHash: sha256(refreshToken), familyId, expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) } });
     return { accessToken, refreshToken, expiresIn: 900, user: { id: userId, email, roles } };
   }

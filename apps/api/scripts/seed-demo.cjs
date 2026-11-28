@@ -630,13 +630,14 @@ async function seedSupportAndOperations() {
   ]) {
     const reference = `QD-SET-DEMO${index}`;
     await prisma.settlement.upsert({
-      where: { reference },
+      where: { idempotencyKey: `demo:${reference}` },
       create: {
         id: `a2000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
         ...account,
         amount,
         status,
         reference,
+        idempotencyKey: `demo:${reference}`,
         createdAt: daysAgo(index * 3),
         updatedAt: daysAgo(index * 3),
       },

@@ -76,4 +76,37 @@ Set each Vercel project's root directory to its app folder (`apps/customer-web`,
 
 Customer registration and sign-in support email/password and Google OAuth. Google OAuth creates customer accounts for new verified Google email addresses and signs in existing accounts with the same verified email. Its callback exchanges a short-lived, single-use login code for the application session. Password reset uses Resend; configure `RESEND_API_KEY`, `EMAIL_FROM` (a verified Resend sender), and `CUSTOMER_WEB_ORIGIN` in the API environment before enabling it. Reset links are single-use and expire after 30 minutes. SMS OTP remains unavailable until an SMS provider is configured. Shop-owner account and shop-profile creation is performed as one database transaction; legacy owner accounts without a linked shop can finish setup after signing in. The shop catalogue stores private PDFs and exposes only published metadata from approved shops; customers receive a private copy when selecting a catalogue document for an order. Admin scripts load `apps/api/.env` or the repository-root `.env` for `DATABASE_URL`; environment variables already set by the host take precedence. To create the first administrator, run `npm --workspace apps/api run admin:bootstrap` once against the migrated database with `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_NAME`, and a unique `BOOTSTRAP_ADMIN_PASSWORD` of at least 16 characters supplied through a secure environment. The script refuses to run if an administrator already exists. To create another administrator without elevating an existing account, run `npm --workspace apps/api run admin:create` with `ADMIN_CREATE_EMAIL`, `ADMIN_CREATE_NAME`, and `ADMIN_CREATE_PASSWORD` (at least 16 characters). To reset an existing, non-suspended administrator's password, run `npm --workspace apps/api run admin:reset-password` against the same database with `ADMIN_RESET_EMAIL` and `ADMIN_RESET_PASSWORD` (at least 16 characters); this also revokes that account's active refresh sessions. After deployment, test customer registration/login and the shop-owner, rider, agent, and admin logins from their respective live Vercel domains.
 
-The super-admin finance view is read-only. PayHere refunds are not enabled until the provider's production endpoint and response/status semantics can be verified; do not treat a recorded payment as refunded based on an unverified response.
+Payments are cash on delivery. PayHere online payments and refunds are not enabled until the provider's production endpoint and response/status semantics can be verified; do not treat a recorded payment as refunded based on an unverified response.
+
+## Order lifecycle and money flow
+
+1. **Order placed.** Pricing is always recomputed on the server. The page count is read from the stored PDF, and the delivery distance is calculated from the shop's coordinates to the customer's delivery coordinates. Orders beyond `MAX_DELIVERY_DISTANCE_KM` (default 50) are refused. A pending cash-on-delivery `Payment` is created, along with an encrypted pickup code and delivery PIN.
+2. **Shop works the order.** Accept or decline, then printing, then ready for pickup. The customer is notified at each step. Only approved shops can handle orders. Declines void the pending payment.
+3. **Handover.** The shop sees the pickup code and the customer sees the delivery PIN. Riders never receive either code; they must enter them in person. Five wrong entries lock the code until the shop or customer issues a new one. Customers can cancel until printing starts.
+4. **Delivery.** A correct PIN marks the delivery done and records the cash payment as `PAID`.
+5. **Completion.** This happens when the customer confirms, or automatically 48 hours after delivery. QuickDoc then writes idempotent ledger entries and three settlements:
+   - a shop payout (print subtotal minus 10% commission)
+   - a rider payout (the delivery earnings)
+   - a rider `CASH_REMITTANCE` for the cash they collected
+
+   Customers can leave one review, which feeds the public shop rating.
+6. **Settlement.** In the admin Finance view, record each payout or cash handover with its bank or receipt reference after the money has moved. The partner is notified.
+
+Attestation bookings follow the same pattern. Customers can cancel before collection. Agents move a job through received, processing, attested, ready for return, and returned. The final step completes the job, creates the agent's payout, and notifies the customer at each stage.
+
+## Address lookup (Google Maps)
+
+The customer and shop portals look addresses up on Google's map through a server-side route, `/api/geocode`. Customers can find a typed delivery address without sharing their device location, saved addresses are pinned on the map automatically, and shops can fill in their coordinates from their address.
+
+Set `GOOGLE_MAPS_API_KEY` in the Vercel projects for **customer-web** and **shop-web**, for all environments, then redeploy. Keep the name exactly that: **do not** add a `NEXT_PUBLIC_` prefix, because that would publish the key to every browser. In Google Cloud, enable the **Geocoding API** and restrict the key to that API only. Results are biased to Sri Lanka; set `GOOGLE_MAPS_REGION` to change this.
+
+Without the key, the portals fall back to the device-location buttons. The route accepts same-origin requests only and allows 20 lookups per minute per IP per server instance.
+
+## Production operations
+
+- **Security headers and limits.** The API sends Helmet security headers and caps JSON bodies at 100 KB. It applies a per-IP rate limit of `RATE_LIMIT_PER_MINUTE` (default 240), with much tighter limits on login, registration and password reset. Render terminates TLS at one proxy hop; set `TRUST_PROXY_HOPS` if that changes, so rate limits see real client IPs.
+- **Sessions.** Access tokens last 15 minutes. Every request re-checks the account in the database, so suspensions and role changes apply immediately. Refresh tokens rotate atomically. Replaying a rotated token more than 30 seconds later revokes the whole session family. The customer, shop, rider and agent portals renew sessions transparently, including in new tabs.
+- **Startup checks.** The API refuses to start without `DATABASE_URL`, and needs a `JWT_SECRET` of at least 32 bytes in production. It logs a warning for each optional integration that is missing (S3, Resend, Google OAuth) and the feature that is unavailable as a result.
+- **Encryption key.** Set `DATA_ENCRYPTION_KEY` (the Blueprint generates one). It encrypts handover codes, so do not rotate it while orders are in flight.
+- **Background jobs.** A maintenance sweep runs every 15 minutes and shortly after start-up. It completes stale delivered orders and deletes expired PDFs that are not attached to an order. Every step is idempotent and safe on several instances. Set `DISABLE_BACKGROUND_JOBS=true` to turn it off.
+- **Pricing defaults are placeholders.** The built-in print and delivery rates (for example LKR 0.50 per black-and-white side and a LKR 10 delivery base) are not market prices. Riders are paid the order's delivery fee. Set real values in the admin catalogue, and each shop's per-side prices, before launch.

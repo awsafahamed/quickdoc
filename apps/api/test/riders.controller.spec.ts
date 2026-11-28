@@ -5,6 +5,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 
 describe('RidersController', () => {
   const prisma = {
+    order: { updateMany: jest.fn() },
     riderProfile: {
       findUnique: jest.fn(),
       upsert: jest.fn(),
@@ -77,17 +78,46 @@ describe('RidersController', () => {
 
     expect(prisma.deliveryAssignment.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { riderId: 'rider-id' },
-      select: expect.objectContaining({
-        Order: {
-          select: {
-            id: true,
-            reference: true,
-            status: true,
-            deliveryAddress: true,
-          },
-        },
-      }),
     }));
+    const orderSelect = prisma.deliveryAssignment.findMany.mock.calls[0][0].select.Order.select;
+    expect(orderSelect).toEqual(expect.objectContaining({ id: true, reference: true, status: true, deliveryAddress: true }));
+    // Riders must never receive the handover codes they are asked to collect in person.
+    for (const secret of ['deliveryPinHash', 'pickupCodeHash', 'deliveryPinEncrypted', 'pickupCodeEncrypted']) {
+      expect(orderSelect).not.toHaveProperty(secret);
+    }
+  });
+
+  it('locks the handover code after repeated wrong guesses', async () => {
+    prisma.riderProfile.findUnique.mockResolvedValue({ userId: 'rider-id', status: 'APPROVED' });
+    prisma.deliveryAssignment.findFirst.mockResolvedValue({
+      id: 'assignment-id',
+      orderId: 'order-id',
+      riderId: 'rider-id',
+      Order: { id: 'order-id', status: 'OUT_FOR_DELIVERY', deliveryPinHash: '0'.repeat(64), pinAttempts: 5 },
+    });
+
+    await expect(controller.assignmentStatus('assignment-id', { status: 'DELIVERED', handoverCode: 'ABCDEF' }, riderRequest))
+      .rejects.toThrow('Too many incorrect codes');
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('counts a wrong guess against the order and reports remaining attempts', async () => {
+    prisma.riderProfile.findUnique.mockResolvedValue({ userId: 'rider-id', status: 'APPROVED' });
+    prisma.deliveryAssignment.findFirst.mockResolvedValue({
+      id: 'assignment-id',
+      orderId: 'order-id',
+      riderId: 'rider-id',
+      Order: { id: 'order-id', status: 'OUT_FOR_DELIVERY', deliveryPinHash: '0'.repeat(64), pinAttempts: 1 },
+    });
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(controller.assignmentStatus('assignment-id', { status: 'DELIVERED', handoverCode: 'ABCDEF' }, riderRequest))
+      .rejects.toThrow('3 attempts remaining');
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-id', pinAttempts: { lt: 5 } },
+      data: { pinAttempts: { increment: 1 } },
+    });
   });
 
   it('does not accept a client-asserted handover verification', async () => {
@@ -100,8 +130,10 @@ describe('RidersController', () => {
       orderId: 'order-id',
       riderId: 'rider-id',
       Order: {
+        id: 'order-id',
         status: 'OUT_FOR_DELIVERY',
         deliveryPinHash: '0'.repeat(64),
+        pinAttempts: 0,
       },
     });
 
@@ -119,6 +151,8 @@ describe('RidersController', () => {
       order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       deliveryStatusHistory: { create: jest.fn().mockResolvedValue({ status: 'DELIVERED' }) },
       orderStatusHistory: { create: jest.fn() },
+      payment: { updateMany: jest.fn() },
+      notification: { createMany: jest.fn() },
     };
     prisma.riderProfile.findUnique.mockResolvedValue({
       userId: 'rider-id',
@@ -129,8 +163,10 @@ describe('RidersController', () => {
       orderId: 'order-id',
       riderId: 'rider-id',
       Order: {
+        id: 'order-id',
         status: 'OUT_FOR_DELIVERY',
         deliveryPinHash: createHash('sha256').update(code).digest('hex'),
+        pinAttempts: 0,
       },
     });
     prisma.$transaction.mockImplementation((callback) => callback(transaction));
@@ -143,7 +179,11 @@ describe('RidersController', () => {
 
     expect(transaction.order.updateMany).toHaveBeenCalledWith({
       where: { id: 'order-id', status: { in: ['OUT_FOR_DELIVERY'] } },
-      data: { status: 'DELIVERED' },
+      data: { status: 'DELIVERED', pinAttempts: 0 },
+    });
+    expect(transaction.payment.updateMany).toHaveBeenCalledWith({
+      where: { orderId: 'order-id', method: 'CASH_ON_DELIVERY', status: 'PENDING' },
+      data: expect.objectContaining({ status: 'PAID' }),
     });
     expect(transaction.orderStatusHistory.create).toHaveBeenCalledWith({
       data: expect.objectContaining({

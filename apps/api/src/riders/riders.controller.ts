@@ -26,7 +26,9 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { handoverCodeMatches, MAX_HANDOVER_ATTEMPTS } from '../orders/handover-codes';
+import { markCashCollected } from '../orders/order-lifecycle';
 import { PrismaService } from '../prisma/prisma.service';
 import { calculateDeliveryFare } from './delivery-pricing';
 
@@ -152,11 +154,27 @@ export class RidersController {
     return profile;
   }
 
-  private matchesHandoverCode(code: string, storedHash: string): boolean {
-    const suppliedHash = createHash('sha256').update(code.toUpperCase()).digest();
-    const expectedHash = Buffer.from(storedHash, 'hex');
-    return expectedHash.length === suppliedHash.length
-      && timingSafeEqual(expectedHash, suppliedHash);
+  /**
+   * Verifies a pickup code or delivery PIN. Failed guesses are counted on the order and the
+   * code locks after MAX_HANDOVER_ATTEMPTS, until the shop or customer issues a new one.
+   */
+  private async verifyHandoverCode(
+    order: { id: string; pinAttempts: number },
+    code: string | undefined,
+    storedHash: string,
+    issuer: 'shop' | 'customer',
+  ): Promise<void> {
+    const locked = `Too many incorrect codes. Ask the ${issuer} to issue a new ${issuer === 'shop' ? 'pickup code' : 'delivery PIN'} in QuickDoc.`;
+    if (order.pinAttempts >= MAX_HANDOVER_ATTEMPTS) throw new ForbiddenException(locked);
+    if (!code) throw new BadRequestException('A valid handover code is required');
+    if (handoverCodeMatches(code, storedHash)) return;
+    const counted = await this.prisma.order.updateMany({
+      where: { id: order.id, pinAttempts: { lt: MAX_HANDOVER_ATTEMPTS } },
+      data: { pinAttempts: { increment: 1 } },
+    });
+    const remaining = MAX_HANDOVER_ATTEMPTS - order.pinAttempts - 1;
+    if (!counted.count || remaining <= 0) throw new ForbiddenException(locked);
+    throw new BadRequestException(`That code is not correct. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`);
   }
 
   @Post('delivery-fare')
@@ -273,6 +291,13 @@ export class RidersController {
               reference: true,
               status: true,
               deliveryAddress: true,
+              instructions: true,
+              total: true,
+              currency: true,
+              Payment: { select: { method: true, status: true, amount: true } },
+              Shop: { select: { name: true, address: true, phone: true, latitude: true, longitude: true } },
+              // Contact details are only needed while the rider is responsible for the handover.
+              customer: { select: { name: true, CustomerProfile: { select: { phone: true } } } },
             },
           },
           DeliveryStatusHistory: {
@@ -461,7 +486,7 @@ export class RidersController {
   @Post('assignments/:id/accept')
   @UseGuards(AuthGuard('jwt'))
   async accept(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() request: AuthenticatedRequest,
   ) {
     const profile = await this.approvedProfileFor(request);
@@ -487,7 +512,7 @@ export class RidersController {
   @Post('assignments/:id/reject')
   @UseGuards(AuthGuard('jwt'))
   async reject(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: RejectAssignmentDto,
     @Req() request: AuthenticatedRequest,
   ) {
@@ -515,7 +540,7 @@ export class RidersController {
   @Post('assignments/:id/status')
   @UseGuards(AuthGuard('jwt'))
   async assignmentStatus(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AssignmentStatusDto,
     @Req() request: AuthenticatedRequest,
   ) {
@@ -538,10 +563,12 @@ export class RidersController {
         ? 'deliveryPinHash'
         : undefined;
     if (codeField) {
-      if (!dto.handoverCode
-        || !this.matchesHandoverCode(dto.handoverCode, assignment.Order[codeField])) {
-        throw new BadRequestException('A valid handover code is required');
-      }
+      await this.verifyHandoverCode(
+        assignment.Order,
+        dto.handoverCode,
+        assignment.Order[codeField],
+        codeField === 'pickupCodeHash' ? 'shop' : 'customer',
+      );
     }
 
     return {
@@ -551,11 +578,13 @@ export class RidersController {
             id: assignment.orderId,
             status: { in: [...transition.from] },
           },
-          data: { status: transition.to },
+          // A verified pickup gives the delivery PIN its own fresh attempt budget.
+          data: { status: transition.to, ...(codeField ? { pinAttempts: 0 } : {}) },
         });
         if (updated.count !== 1) {
           throw new ConflictException('This delivery changed; refresh and try again');
         }
+        if (dto.status === 'DELIVERED') await markCashCollected(transaction, assignment.orderId);
         const history = await transaction.deliveryStatusHistory.create({
           data: {
             id: randomUUID(),
@@ -606,7 +635,7 @@ export class RidersController {
   @Post('assignments/:id/location')
   @UseGuards(AuthGuard('jwt'))
   async location(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: LocationDto,
     @Req() request: AuthenticatedRequest,
   ) {
@@ -642,14 +671,18 @@ export class RidersController {
     const settlements = await this.prisma.settlement.findMany({
       where: { riderId: profile.userId },
       orderBy: { createdAt: 'desc' },
+      take: 200,
     });
+    const payouts = settlements.filter((item) => item.kind !== 'CASH_REMITTANCE');
+    const sum = (items: typeof settlements) => Math.round(items.reduce((total, item) => total + Number(item.amount), 0) * 100) / 100;
     return {
       data: {
-        earned: settlements.reduce((sum, item) => sum + Number(item.amount), 0),
-        pending: settlements
-          .filter((item) => item.status === 'PENDING')
-          .reduce((sum, item) => sum + Number(item.amount), 0),
-        settlements,
+        earned: sum(payouts),
+        pending: sum(payouts.filter((item) => item.status === 'PENDING')),
+        // Cash collected from customers on delivery that the rider still has to hand over.
+        cashToRemit: sum(settlements.filter((item) => item.kind === 'CASH_REMITTANCE' && item.status === 'PENDING')),
+        settlements: payouts,
+        remittances: settlements.filter((item) => item.kind === 'CASH_REMITTANCE'),
       },
     };
   }

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Type } from 'class-transformer';
 import { IsBoolean, IsInt, IsOptional, IsString, IsUUID, Length, Max, MaxLength, Min } from 'class-validator';
@@ -184,7 +184,7 @@ export class ShopCatalogController {
       throw new BadRequestException('Catalogue upload key is invalid');
     }
     await this.ensureFolder(shop.id, dto.folderId);
-    await this.storage.verifyPdfUpload(dto.objectKey, dto.sizeBytes);
+    const pageCount = await this.storage.verifyPdfUpload(dto.objectKey, dto.sizeBytes);
     return {
       data: await this.prisma.shopCatalogDocument.create({
         data: {
@@ -196,7 +196,7 @@ export class ShopCatalogController {
           description: dto.description?.trim() ?? '',
           mimeType: dto.mimeType,
           sizeBytes: dto.sizeBytes,
-          pageCount: dto.pageCount,
+          pageCount,
           updatedAt: new Date(),
         },
       }),

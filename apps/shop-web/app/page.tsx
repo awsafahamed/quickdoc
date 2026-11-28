@@ -1,5 +1,6 @@
 'use client';
 
+import { geocodeAddress } from './geocode';
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 
 type View =
@@ -59,6 +60,8 @@ type Order = {
   DeliveryAssignment?: { id: string; riderId: string; earnings: number | string; updatedAt: string } | null;
   DeliveryOffer?: { id: string }[];
   Payment?: { status: string; method: string; amount: number | string } | null;
+  pickupCode?: string | null;
+  handoverLocked?: boolean;
 };
 
 type Settlement = {
@@ -149,7 +152,8 @@ const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frida
 async function api<T>(path: string, options: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers = new Headers(options.headers);
   const token = window.sessionStorage.getItem('shop-access-token');
-  if (token) headers.set('Authorization', `Bearer ${token}`);
+  // With only a stored refresh token (e.g. a new tab), the session interceptor renews it.
+  if (token || window.localStorage.getItem('shop-refresh-token')) headers.set('Authorization', `Bearer ${token ?? ''}`);
   if (options.json !== undefined) headers.set('Content-Type', 'application/json');
   let response: Response;
   try {
@@ -250,7 +254,7 @@ export default function ShopPortal() {
   const [authError, setAuthError] = useState('');
   useEffect(() => {
     const token = window.sessionStorage.getItem('shop-access-token');
-    if (!token) { setAuth('anonymous'); return; }
+    if (!token && !window.localStorage.getItem('shop-refresh-token')) { setAuth('anonymous'); return; }
     let active = true;
     const restore = async () => {
       try {
@@ -303,6 +307,21 @@ function RegistrationPage({ onReady, initialMode = 'login', initialError = '' }:
   const [message, setMessage] = useState('');
   const [locationError, setLocationError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  const [locating, setLocating] = useState(false);
+  const findAddress = async () => {
+    setLocationError('');
+    if (address.trim().length < 5) { setLocationError('Enter the shop address first.'); return; }
+    setLocating(true);
+    try {
+      const found = await geocodeAddress(address);
+      setLatitude(found.latitude.toFixed(6));
+      setLongitude(found.longitude.toFixed(6));
+      setLocationError(`Found: ${found.formattedAddress}. Check this is your shop before continuing.`);
+    } catch (reason) {
+      setLocationError(reason instanceof Error ? reason.message : 'Address lookup is unavailable.');
+    } finally { setLocating(false); }
+  };
 
   const useCurrentLocation = () => {
     setLocationError('');
@@ -389,7 +408,7 @@ function RegistrationPage({ onReady, initialMode = 'login', initialError = '' }:
       {(mode === 'login' || mode === 'register') && <div className="auth-switch" role="tablist" aria-label="Account action"><button type="button" role="tab" aria-selected={mode === 'login'} className={mode === 'login' ? 'selected' : ''} onClick={() => { setMode('login'); setError(''); setMessage(''); }}>Sign in</button><button type="button" role="tab" aria-selected={mode === 'register'} className={mode === 'register' ? 'selected' : ''} onClick={() => { setMode('register'); setError(''); setMessage(''); }}>Create shop account</button></div>}
       <h2>{mode === 'login' ? 'Welcome back' : mode === 'forgot' ? 'Reset your password' : mode === 'setup' ? 'Finish shop setup' : 'Set up your shop'}</h2><p className="auth-subtitle">{mode === 'login' ? 'Sign in to pick up where you left off.' : mode === 'forgot' ? 'We will email a secure reset link if this account exists.' : mode === 'setup' ? 'Your account is signed in. Add the shop details needed to use the workspace.' : 'Start with your business details. New shops are reviewed before they can accept orders.'}</p>
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
-        {(mode === 'register' || mode === 'setup') && <><label>Business name<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your print shop" autoComplete="organization" /></label><label>Business phone<input required minLength={7} maxLength={20} value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" /></label><label>Shop address<input required minLength={5} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street, building and city" autoComplete="street-address" /></label><div className="location-fields"><button className="button button--secondary" type="button" onClick={useCurrentLocation}>Use current location</button><label>Latitude<input required type="number" step="any" min="-90" max="90" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="6.9271" /></label><label>Longitude<input required type="number" step="any" min="-180" max="180" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="79.8612" /></label></div>{locationError && <p className="form-error" role="alert">{locationError}</p>}</>}
+        {(mode === 'register' || mode === 'setup') && <><label>Business name<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your print shop" autoComplete="organization" /></label><label>Business phone<input required minLength={7} maxLength={20} value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" /></label><label>Shop address<input required minLength={5} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street, building and city" autoComplete="street-address" /></label><div className="location-fields"><button className="button button--secondary" type="button" disabled={locating} onClick={() => void findAddress()}>{locating ? 'Finding…' : 'Find address on map'}</button><button className="button button--secondary" type="button" onClick={useCurrentLocation}>Use current location</button><label>Latitude<input required type="number" step="any" min="-90" max="90" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="6.9271" /></label><label>Longitude<input required type="number" step="any" min="-180" max="180" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="79.8612" /></label></div>{locationError && <p className="form-error" role="alert">{locationError}</p>}</>}
         {(mode === 'login' || mode === 'register' || mode === 'forgot') && <label>Business email<input required type="email" maxLength={254} autoComplete="email" value={email} onChange={(event) => { setEmail(event.target.value); setError(''); }} placeholder="you@business.com" /></label>}
         {(mode === 'login' || mode === 'register') && <label>Password<input required type="password" minLength={mode === 'register' ? 8 : undefined} maxLength={128} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => { setPassword(event.target.value); setError(''); }} placeholder={mode === 'register' ? 'At least 8 characters' : 'Your password'} /></label>}
         {error && <p className="form-error" role="alert">{error}</p>}
@@ -614,6 +633,18 @@ function DeliveryPage() {
   const [actionError, setActionError] = useState('');
   const [message, setMessage] = useState('');
   const deliveries = orders.filter((order) => ['READY_FOR_PICKUP', 'RIDER_ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'].includes(order.status));
+  const [codes, setCodes] = useState<Record<string, string>>({});
+  const reissueCode = async (order: Order) => {
+    setActionError('');
+    setMessage('');
+    try {
+      const result = await api<Envelope<{ pickupCode: string }>>(`/shop/me/orders/${encodeURIComponent(order.id)}/pickup-code`, { method: 'POST' });
+      setCodes((current) => ({ ...current, [order.id]: result.data.pickupCode }));
+      setMessage(`New pickup code for ${order.reference}. The previous code no longer works.`);
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : 'A new pickup code could not be issued.');
+    }
+  };
   const dispatch = async (order: Order) => {
     setDispatching(order.id);
     setActionError('');
@@ -630,7 +661,7 @@ function DeliveryPage() {
       setDispatching('');
     }
   };
-  return <section className="content"><PageHeader title="Delivery handover" description="Nearby approved riders are notified when an order is ready. Pickup codes and delivery PINs remain private to the assigned rider." />{error && <LoadError message={error} retry={reload} />}{actionError && <LoadError message={actionError} />}{message && <p className="success-message" role="status">{message}</p>}{loading ? <div className="panel"><LoadingRows count={5} /></div> : deliveries.length ? <div className="panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Ready since</th><th>Rider assignment</th><th>Status</th><th className="align-right">Total</th></tr></thead><tbody>{deliveries.map((order) => <tr key={order.id}><td><strong className="order-reference">{order.reference}</strong></td><td>{order.customer.name}</td><td>{dateLabel(order.updatedAt)}</td><td>{order.DeliveryAssignment ? `Assigned · ${order.DeliveryAssignment.riderId.slice(0, 8)}` : order.status === 'READY_FOR_PICKUP' ? `${order.DeliveryOffer?.length ?? 0} rider offers pending` : 'Assignment unavailable'}</td><td><StatusBadge status={order.status} /></td><td className="align-right amount-cell">{money(order.total, order.currency)}{order.status === 'READY_FOR_PICKUP' && !order.DeliveryAssignment && !order.DeliveryOffer?.length && <button className="text-button dispatch-action" type="button" disabled={dispatching === order.id} onClick={() => void dispatch(order)}>{dispatching === order.id ? 'Notifying…' : 'Notify nearby riders'}</button>}</td></tr>)}</tbody></table></div><div className="delivery-note"><Icon name="delivery" size={18} /><p>Riders within 8 km with a recent location update are notified. The first rider to accept receives the delivery assignment.</p></div></div> : <EmptyState title="No deliveries in progress" body="Orders marked ready for pickup and their rider assignments will appear here." />}</section>;
+  return <section className="content"><PageHeader title="Delivery handover" description="Nearby approved riders are notified when an order is ready. Hand the order over only after the rider enters your pickup code in their app." />{error && <LoadError message={error} retry={reload} />}{actionError && <LoadError message={actionError} />}{message && <p className="success-message" role="status">{message}</p>}{loading ? <div className="panel"><LoadingRows count={5} /></div> : deliveries.length ? <div className="panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Ready since</th><th>Rider assignment</th><th>Pickup code</th><th>Status</th><th className="align-right">Total</th></tr></thead><tbody>{deliveries.map((order) => <tr key={order.id}><td><strong className="order-reference">{order.reference}</strong></td><td>{order.customer.name}</td><td>{dateLabel(order.updatedAt)}</td><td>{order.DeliveryAssignment ? `Assigned · ${order.DeliveryAssignment.riderId.slice(0, 8)}` : order.status === 'READY_FOR_PICKUP' ? `${order.DeliveryOffer?.length ?? 0} rider offers pending` : 'Assignment unavailable'}</td><td>{['READY_FOR_PICKUP', 'RIDER_ASSIGNED'].includes(order.status) ? <span className="pickup-code">{(codes[order.id] ?? order.pickupCode) ? <strong>{codes[order.id] ?? order.pickupCode}</strong> : <small>Not issued</small>}{order.handoverLocked && !codes[order.id] && <small className="pickup-code__locked">Locked after wrong attempts</small>}<button className="text-button" type="button" onClick={() => void reissueCode(order)}>{(codes[order.id] ?? order.pickupCode) ? 'New code' : 'Issue code'}</button></span> : <small>—</small>}</td><td><StatusBadge status={order.status} /></td><td className="align-right amount-cell">{money(order.total, order.currency)}{order.status === 'READY_FOR_PICKUP' && !order.DeliveryAssignment && !order.DeliveryOffer?.length && <button className="text-button dispatch-action" type="button" disabled={dispatching === order.id} onClick={() => void dispatch(order)}>{dispatching === order.id ? 'Notifying…' : 'Notify nearby riders'}</button>}</td></tr>)}</tbody></table></div><div className="delivery-note"><Icon name="delivery" size={18} /><p>Riders within 8 km with a recent location update are notified. The first rider to accept receives the delivery assignment.</p></div></div> : <EmptyState title="No deliveries in progress" body="Orders marked ready for pickup and their rider assignments will appear here." />}</section>;
 }
 
 function ServicesPage() {
@@ -999,6 +1030,16 @@ function ProfilePage({ shop, onSave }: { shop: ShopProfile; onSave: (shop: ShopP
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState('');
   const [error, setError] = useState('');
+  const [locating, setLocating] = useState(false);
+  const locateAddress = async () => {
+    setError(''); setSaved(''); setLocating(true);
+    try {
+      const found = await geocodeAddress(form.address);
+      setForm((current) => ({ ...current, latitude: found.latitude, longitude: found.longitude }));
+      setSaved(`Location updated from address: ${found.formattedAddress}. Save to apply.`);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Address lookup is unavailable.'); }
+    finally { setLocating(false); }
+  };
   const saveProfile = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError(''); setSaved('');
     try { const result = await api<Envelope<ShopProfile>>('/shop/me', { method: 'PATCH', json: form }); onSave(result.data); setSaved('Shop profile updated.'); }
@@ -1012,7 +1053,7 @@ function ProfilePage({ shop, onSave }: { shop: ShopProfile; onSave: (shop: ShopP
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Opening hours could not be saved.'); }
   };
   return <section className="content"><PageHeader title="Shop profile" description="Keep your public business details and opening hours accurate." />
-    <div className="profile-layout"><form className="panel profile-form" onSubmit={(event) => void saveProfile(event)}><div className="panel-heading"><div><h2>Business details</h2><p>Shown to customers when they choose a print shop.</p></div><StatusBadge status={shop.status} /></div><label>Shop name<input required minLength={2} maxLength={120} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label>Business address<input required minLength={5} maxLength={500} value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label><label>Phone<input required minLength={7} maxLength={20} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><div className="form-grid"><label>Latitude<input required type="number" min="-90" max="90" step="0.0000001" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: Number(event.target.value) })} /></label><label>Longitude<input required type="number" min="-180" max="180" step="0.0000001" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: Number(event.target.value) })} /></label></div><div className="form-end"><button className="button button--primary" disabled={busy}>{busy ? 'Saving…' : 'Save business details'}</button>{saved && <span className="success-message" role="status">{saved}</span>}</div>{error && <LoadError message={error} />}</form>
+    <div className="profile-layout"><form className="panel profile-form" onSubmit={(event) => void saveProfile(event)}><div className="panel-heading"><div><h2>Business details</h2><p>Shown to customers when they choose a print shop.</p></div><StatusBadge status={shop.status} /></div><label>Shop name<input required minLength={2} maxLength={120} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label>Business address<input required minLength={5} maxLength={500} value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label><button className="button button--secondary" type="button" disabled={locating || form.address.trim().length < 5} onClick={() => void locateAddress()}>{locating ? 'Finding…' : 'Update location from address'}</button><label>Phone<input required minLength={7} maxLength={20} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><div className="form-grid"><label>Latitude<input required type="number" min="-90" max="90" step="0.0000001" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: Number(event.target.value) })} /></label><label>Longitude<input required type="number" min="-180" max="180" step="0.0000001" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: Number(event.target.value) })} /></label></div><div className="form-end"><button className="button button--primary" disabled={busy}>{busy ? 'Saving…' : 'Save business details'}</button>{saved && <span className="success-message" role="status">{saved}</span>}</div>{error && <LoadError message={error} />}</form>
       <section className="panel hours-panel"><div className="panel-heading"><div><h2>Opening hours</h2><p>Set a regular schedule for each day.</p></div></div>{hoursError && <LoadError message={hoursError} retry={reloadHours} />}{hoursLoading ? <LoadingRows count={3} /> : weekdays.map((day, index) => { const hour = hourDrafts[index] ?? hours.find((item) => item.dayOfWeek === index) ?? { dayOfWeek: index, opensAt: '09:00', closesAt: '18:00', isClosed: true }; return <div className="hour-row" key={day}><strong>{day}</strong><label className="toggle-control"><input type="checkbox" checked={!hour.isClosed} onChange={(event) => setHourDrafts((drafts) => ({ ...drafts, [index]: { ...hour, isClosed: !event.target.checked } }))} /><span /><b>{hour.isClosed ? 'Closed' : 'Open'}</b></label><input type="time" aria-label={`${day} opening time`} disabled={hour.isClosed} value={hour.opensAt} onChange={(event) => setHourDrafts((drafts) => ({ ...drafts, [index]: { ...hour, opensAt: event.target.value } }))} /><span className="hour-to">to</span><input type="time" aria-label={`${day} closing time`} disabled={hour.isClosed} value={hour.closesAt} onChange={(event) => setHourDrafts((drafts) => ({ ...drafts, [index]: { ...hour, closesAt: event.target.value } }))} /><button className="text-button" type="button" onClick={() => void saveHour(index)}>Save</button></div>; })}</section></div>
   </section>;
 }
