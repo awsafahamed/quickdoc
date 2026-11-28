@@ -298,7 +298,7 @@ export default function RiderPortal() {
 }
 
 function RiderRegistration({ initialError, onRegistered }: { initialError: string; onRegistered: (profile: RiderProfile) => void }) {
-  const [mode, setMode] = useState<'register' | 'login' | 'complete'>('register');
+  const [mode, setMode] = useState<'register' | 'login' | 'complete'>('login');
   const [phone, setPhone] = useState('+94');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -440,7 +440,7 @@ function RiderRegistration({ initialError, onRegistered }: { initialError: strin
 
   return (
     <main className="rider-registration">
-      <section className="rider-registration-copy"><span className="registration-mark">P</span><p>RIDER PORTAL</p><h1>Make every delivery count.</h1><p>Complete verification to receive print and attestation delivery requests.</p></section>
+      <section className="rider-registration-copy"><span className="registration-mark"><img src="/logo/quickdoc-logo.svg" alt="QuickDoc" /></span><p>RIDER PORTAL</p><h1>Make every delivery count.</h1><p>Complete verification to receive print and attestation delivery requests.</p></section>
       <section className="rider-registration-panel">
         {mode !== 'complete' && <div className="rider-auth-tabs">
           <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); }}>Create account</button>
@@ -519,6 +519,24 @@ function ActiveDeliveryPage({ assignments, onUpdated }: { assignments: RiderAssi
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const selected = activeAssignments.find((item) => item.id === selectedId) ?? activeAssignments[0];
+  const release = async () => {
+    if (!selected) return;
+    if (!window.confirm(`Release ${selected.Order.reference}? It will be offered to other riders.`)) return;
+    setBusy(true);
+    setError('');
+    try {
+      await riderRequest(`/riders/assignments/${encodeURIComponent(selected.id)}/release`, {
+        method: 'POST',
+        bodyData: failureReason.trim() ? { reason: failureReason.trim() } : {},
+      });
+      setFailureReason('');
+      onUpdated();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'The delivery could not be released.');
+    } finally {
+      setBusy(false);
+    }
+  };
   const updateStatus = async (status: string, extra: { handoverCode?: string; reason?: string } = {}) => {
     if (!selected) return;
     setBusy(true);
@@ -541,14 +559,19 @@ function ActiveDeliveryPage({ assignments, onUpdated }: { assignments: RiderAssi
     {error && <p className="registration-error" role="alert">{error}</p>}
     {!selected ? <div className="empty-workspace"><h2>No active delivery</h2><p>Accept a nearby request to start a delivery.</p></div> : <div className="active-layout">
       <section className="delivery-detail-card"><div className="delivery-detail-heading"><div><span>Order reference</span><h2>{selected.Order.reference}</h2></div><strong>{selected.Order.status.replaceAll('_', ' ')}</strong></div>{selected.Order.Shop && <div className="delivery-address"><span>Pick up from</span><p><strong>{selected.Order.Shop.name}</strong><br />{selected.Order.Shop.address}</p><p className="delivery-contact"><a href={`tel:${selected.Order.Shop.phone}`}>Call shop</a> · <a href={`https://www.google.com/maps/dir/?api=1&destination=${selected.Order.Shop.latitude},${selected.Order.Shop.longitude}`} target="_blank" rel="noreferrer">Directions</a></p></div>}
-        <div className="delivery-address"><span>Deliver to</span><p>{selected.Order.customer?.name && <><strong>{selected.Order.customer.name}</strong><br /></>}{addressText(selected.Order.deliveryAddress)}</p>{selected.Order.instructions && <p><small>Note: {selected.Order.instructions}</small></p>}<p className="delivery-contact">{selected.Order.customer?.CustomerProfile?.phone && <><a href={`tel:${selected.Order.customer.CustomerProfile.phone}`}>Call customer</a> · </>}{mapsLink(selected.Order.deliveryAddress) && <a href={mapsLink(selected.Order.deliveryAddress)!} target="_blank" rel="noreferrer">Directions</a>}</p></div>
+        <div className="delivery-address"><span>Deliver to</span><p>{selected.Order.customer?.name && <><strong>{selected.Order.customer.name}</strong><br /></>}{addressText(selected.Order.deliveryAddress)}</p>{selected.Order.instructions && <p><small>Note: {selected.Order.instructions}</small></p>}<p className="delivery-contact">{[
+          selected.Order.customer?.CustomerProfile?.phone ? <a key="call" href={`tel:${selected.Order.customer.CustomerProfile.phone}`}>Call customer</a> : null,
+          mapsLink(selected.Order.deliveryAddress) ? <a key="map" href={mapsLink(selected.Order.deliveryAddress)!} target="_blank" rel="noreferrer">Directions</a> : null,
+        ].filter(Boolean).flatMap((link, index) => index ? [<span key={`sep-${index}`} aria-hidden="true">·</span>, link] : [link])}</p></div>
         {selected.Order.Payment?.method === 'CASH_ON_DELIVERY' && <div className="cash-collect"><span>Collect in cash</span><strong>{selected.Order.currency ?? 'LKR'} {Number(selected.Order.Payment.amount).toFixed(2)}</strong><small>{selected.Order.Payment.status === 'PAID' ? 'Recorded as collected' : 'Collect before entering the delivery PIN.'}</small></div>}
         <h3>Delivery progress</h3><div className="delivery-history">{selected.DeliveryStatusHistory.map((event) => <div key={event.id}><i /><span><strong>{event.status.replaceAll('_', ' ')}</strong><small>{new Date(event.createdAt).toLocaleString()}{event.reason ? ` · ${event.reason}` : ''}</small></span></div>)}</div>
       </section>
       <aside className="handover-panel"><h2>Update delivery</h2>{selected.Order.status === 'RIDER_ASSIGNED' && <form onSubmit={(event) => { event.preventDefault(); void updateStatus('PICKED_UP', { handoverCode: handoverCode.trim() }); }}><label>Shop pickup code<input value={handoverCode} onChange={(event) => setHandoverCode(event.target.value.toUpperCase())} inputMode="text" autoComplete="one-time-code" maxLength={6} pattern="[A-Fa-f0-9]{6}" required /></label><small>Ask the shop to provide the pickup code in person.</small><button type="submit" disabled={busy || !/^[A-Fa-f0-9]{6}$/.test(handoverCode)}>{busy ? 'Verifying…' : 'Confirm pickup'}</button></form>}
         {selected.Order.status === 'PICKED_UP' && <><p>Confirm that you are starting the trip to the customer.</p><button type="button" disabled={busy} onClick={() => void updateStatus('ARRIVED_DROPOFF')}>{busy ? 'Updating…' : 'Start delivery'}</button></>}
         {selected.Order.status === 'OUT_FOR_DELIVERY' && <form onSubmit={(event) => { event.preventDefault(); void updateStatus('DELIVERED', { handoverCode: handoverCode.trim() }); }}><label>Customer delivery PIN<input value={handoverCode} onChange={(event) => setHandoverCode(event.target.value.toUpperCase())} inputMode="text" autoComplete="one-time-code" maxLength={6} pattern="[A-Fa-f0-9]{6}" required /></label><small>Ask the customer for their PIN at handover.</small><button type="submit" disabled={busy || !/^[A-Fa-f0-9]{6}$/.test(handoverCode)}>{busy ? 'Verifying…' : 'Confirm delivery'}</button></form>}
-        <form className="delivery-failure-form" onSubmit={(event) => { event.preventDefault(); void updateStatus('FAILED', { reason: failureReason.trim() }); }}><label>Report a failed delivery<textarea value={failureReason} onChange={(event) => setFailureReason(event.target.value)} maxLength={500} required placeholder="Explain what prevented delivery" /></label><button type="submit" className="failure-action" disabled={busy || failureReason.trim().length < 3}>{busy ? 'Saving…' : 'Report issue'}</button></form>
+        {selected.Order.status === 'RIDER_ASSIGNED'
+          ? <form className="delivery-failure-form" onSubmit={(event) => { event.preventDefault(); void release(); }}><label>Can’t make this pickup?<textarea value={failureReason} onChange={(event) => setFailureReason(event.target.value)} maxLength={500} placeholder="Optional: tell the shop why" /></label><small>The order goes back to other nearby riders. Only release it before you collect the documents.</small><button type="submit" className="failure-action" disabled={busy}>{busy ? 'Releasing…' : 'Release this delivery'}</button></form>
+          : <form className="delivery-failure-form" onSubmit={(event) => { event.preventDefault(); void updateStatus('FAILED', { reason: failureReason.trim() }); }}><label>Report a failed delivery<textarea value={failureReason} onChange={(event) => setFailureReason(event.target.value)} maxLength={500} required placeholder="Explain what prevented delivery" /></label><button type="submit" className="failure-action" disabled={busy || failureReason.trim().length < 3}>{busy ? 'Saving…' : 'Report issue'}</button></form>}
       </aside>
     </div>}
   </section>;
@@ -556,9 +579,12 @@ function ActiveDeliveryPage({ assignments, onUpdated }: { assignments: RiderAssi
 
 function mapsLink(address: unknown): string | null {
   if (!address || typeof address !== 'object') return null;
-  const { latitude, longitude } = address as { latitude?: unknown; longitude?: unknown };
-  if (typeof latitude !== 'number' || typeof longitude !== 'number') return null;
-  return `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`;
+  const { latitude, longitude, line } = address as { latitude?: unknown; longitude?: unknown; line?: unknown };
+  if (typeof latitude === 'number' && typeof longitude === 'number') {
+    return `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`;
+  }
+  // Older orders only stored the typed address; let Google Maps search for it.
+  return typeof line === 'string' && line.trim() ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(line)}` : null;
 }
 
 function HistoryPage({ assignments, loading }: { assignments: RiderAssignment[]; loading: boolean }) {

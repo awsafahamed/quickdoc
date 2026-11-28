@@ -309,7 +309,7 @@ export default function AgentPortal() {
           {navigation.map((item) => (
             <button className={view === item.id ? 'active' : ''} key={item.id} type="button" aria-current={view === item.id ? 'page' : undefined} onClick={() => { setView(item.id); setMobileOpen(false); }}>
               <Icon name={item.icon} /><span>{item.label}</span>
-              {item.id === 'jobs' && jobs.length > 0 && <span className="nav-count">{jobs.filter((job) => !['COMPLETED', 'DELIVERED'].includes(job.status)).length}</span>}
+              {item.id === 'jobs' && jobs.length > 0 && <span className="nav-count">{jobs.filter((job) => !['COMPLETED', 'DELIVERED', 'CANCELLED'].includes(job.status)).length}</span>}
             </button>
           ))}
         </nav>
@@ -440,9 +440,9 @@ function Dashboard({ profile, jobs, earnings, loading, setView, onAvailability }
   setView: (view: AgentView) => void;
   onAvailability: (isOpen: boolean) => Promise<void>;
 }) {
-  const activeJobs = jobs.filter((job) => !['COMPLETED', 'DELIVERED'].includes(job.status));
+  const activeJobs = jobs.filter((job) => !['COMPLETED', 'DELIVERED', 'CANCELLED'].includes(job.status));
   const processingJobs = jobs.filter((job) => ['AGENT_RECEIVED', 'PROCESSING', 'ATTESTED', 'RETURN_READY'].includes(job.status));
-  const completeJobs = jobs.filter((job) => ['COMPLETED', 'DELIVERED'].includes(job.status));
+  const completeJobs = jobs.filter((job) => ['COMPLETED', 'DELIVERED', 'CANCELLED'].includes(job.status));
   const latestJobs = [...activeJobs].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 4);
   return (
     <section>
@@ -484,9 +484,9 @@ function JobsPage({ jobs, services, loading, processing = false, completed = fal
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const filteredJobs = useMemo(() => jobs.filter((job) => {
-    if (completed) return ['DELIVERED', 'COMPLETED'].includes(job.status);
+    if (completed) return ['DELIVERED', 'COMPLETED', 'CANCELLED'].includes(job.status);
     if (processing) return ['AGENT_RECEIVED', 'PROCESSING', 'ATTESTED', 'RETURN_READY'].includes(job.status);
-    return !['COMPLETED', 'DELIVERED'].includes(job.status);
+    return !['COMPLETED', 'DELIVERED', 'CANCELLED'].includes(job.status);
   }), [jobs, processing, completed]);
   const selectedJob = filteredJobs.find((job) => job.id === selectedId) ?? filteredJobs[0];
   const action = selectedJob ? custodyActions[selectedJob.status] : undefined;

@@ -582,3 +582,23 @@ a { color: inherit; }
 .pickup-code { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .pickup-code strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 16px; letter-spacing: 0.16em; }
 .pickup-code__locked { flex-basis: 100%; color: #b45309; }
+
+/* UX audit: readable tables, phone-friendly rows, recoverable collapsed sidebar */
+.data-table th { font-size: 10.5px; }
+.data-table td { font-size: 12px; }
+.portal--collapsed .sidebar-top { flex-direction: column; gap: 12px; }
+.portal--collapsed .collapse-button { display: grid; }
+.portal--collapsed .collapse-button span { transform: rotate(-45deg); }
+@media (max-width: 620px) {
+  .table-scroll { overflow: visible; }
+  .data-table, .data-table tbody, .data-table tr, .data-table td { display: block; width: 100%; }
+  .data-table { white-space: normal; }
+  .data-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .data-table tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 12px 4px; border-bottom: 1px solid var(--line); }
+  .data-table td { width: auto; height: auto; padding: 0; border: 0; font-size: 13px; }
+  .data-table td:first-child { flex-basis: 100%; color: var(--ink); font-weight: 650; }
+  .data-table td.align-right { margin-left: auto; text-align: right; }
+  .pickup-code { flex-basis: 100%; }
+  .pickup-code strong { font-size: 18px; }
+}
+.dispatch-action { display: block; margin: 6px 0 0 auto; }

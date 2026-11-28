@@ -273,6 +273,7 @@ describe('CustomerController delivery confirmation', () => {
       notification: { createMany: jest.fn() },
       financialLedgerEntry: { createMany: jest.fn() },
       settlement: { createMany: jest.fn() },
+      payment: { updateMany: jest.fn() },
     };
     const prisma = {
       order: {
