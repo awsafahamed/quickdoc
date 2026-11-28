@@ -110,6 +110,10 @@ function Icon({ name }: { name: string }) {
     wallet: 'M3 6h18v13H3zM3 10h18M16 14h2',
     pin: 'M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12zM12 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
     bell: 'M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4',
+    home: 'M3 10.5 12 3l9 7.5M5.5 9v10h13V9M9 19v-5h6v5',
+    user: 'M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10z',
+    logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
+    chevron: 'M9 6l6 6-6 6',
   };
   return <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
 }
@@ -283,7 +287,7 @@ export default function RiderPortal() {
         <button className="rider-profile" type="button" onClick={() => setView('profile')}><span className="rider-avatar">{profile.phone?.slice(-2) ?? 'RD'}</span><span><strong>Rider account</strong><small>{profile.phone ?? 'Update your contact details'}</small></span></button>
       </aside>
       <main className="rider-main">
-        <header className="topbar"><button className="rider-menu" type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><span /><span /><span /></button><div className="breadcrumb"><span>Rider workspace</span><b>›</b><strong>{nav.find((item) => item.id === view)?.label ?? 'My profile'}</strong></div><div className="topbar__actions"><div className="rider-notifications"><button className="notification-button" type="button" aria-label={`Notifications${notifications.some((item) => !item.readAt) ? ', unread' : ''}`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Icon name="bell" />{notifications.some((item) => !item.readAt) && <span />}</button>{notificationsOpen && <div className="rider-notification-panel" role="region" aria-label="Notifications"><strong>Notifications</strong>{notifications.length ? notifications.map((item) => <button key={item.id} type="button" className={item.readAt ? 'read' : ''} onClick={() => { if (!item.readAt) void markNotificationRead(item.id); }}><span>{item.title}<time>{new Date(item.createdAt).toLocaleString()}</time></span><small>{item.body}</small></button>) : <p>You’re all caught up.</p>}</div>}</div><button className="availability-button" type="button" aria-pressed={online} disabled={updatingAvailability || (profile.status !== 'APPROVED' && !online)} onClick={toggleAvailability}><i className={online ? 'online' : ''} />{updatingAvailability ? 'Updating…' : online ? 'Online' : profile.status === 'APPROVED' ? 'Offline' : 'Pending approval'}</button><button className="rider-sign-out" type="button" onClick={() => void signOut()}>Sign out</button></div></header>
+        <header className="topbar"><button className="rider-menu" type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><span /><span /><span /></button><div className="breadcrumb"><span>Rider workspace</span><b>›</b><strong>{nav.find((item) => item.id === view)?.label ?? 'My profile'}</strong></div><div className="app-title"><img src="/logo/quickdoc-logo.svg" alt="" aria-hidden="true" /><strong>{view === 'dashboard' ? 'QuickDoc Rider' : nav.find((item) => item.id === view)?.label ?? 'Account'}</strong></div><div className="topbar__actions"><div className="rider-notifications"><button className="notification-button" type="button" aria-label={`Notifications${notifications.some((item) => !item.readAt) ? ', unread' : ''}`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Icon name="bell" />{notifications.some((item) => !item.readAt) && <span />}</button>{notificationsOpen && <div className="rider-notification-panel" role="region" aria-label="Notifications"><strong>Notifications</strong>{notifications.length ? notifications.map((item) => <button key={item.id} type="button" className={item.readAt ? 'read' : ''} onClick={() => { if (!item.readAt) void markNotificationRead(item.id); }}><span>{item.title}<time>{new Date(item.createdAt).toLocaleString()}</time></span><small>{item.body}</small></button>) : <p>You’re all caught up.</p>}</div>}</div><button className="availability-button" type="button" aria-pressed={online} disabled={updatingAvailability || (profile.status !== 'APPROVED' && !online)} onClick={toggleAvailability}><i className={online ? 'online' : ''} />{updatingAvailability ? 'Updating…' : online ? 'Online' : profile.status === 'APPROVED' ? 'Offline' : 'Pending approval'}</button><button className="rider-sign-out" type="button" onClick={() => void signOut()}>Sign out</button></div></header>
         {workspaceError && <p className="registration-error rider-workspace-error" role="alert">{workspaceError}<button type="button" onClick={() => setReloadKey((key) => key + 1)}>Retry</button></p>}
         {availabilityError && <p className="registration-error" role="alert">{availabilityError}</p>}
         {view === 'dashboard' && <Dashboard online={online} status={profile.status} assignments={assignments} offers={offers} loading={workspaceLoading} onToggleOnline={toggleAvailability} onNavigate={setView} />}
@@ -291,8 +295,22 @@ export default function RiderPortal() {
         {view === 'active' && <ActiveDeliveryPage assignments={assignments} onUpdated={() => setReloadKey((key) => key + 1)} />}
         {view === 'history' && <HistoryPage assignments={assignments} loading={workspaceLoading} />}
         {view === 'earnings' && <EarningsPage />}
-        {view === 'profile' && <ProfilePage profile={profile} onSaved={(updated) => setProfile((current) => current ? { ...updated, RiderAvailability: current.RiderAvailability } : updated)} />}
+        {view === 'profile' && <ProfilePage profile={profile} onSaved={(updated) => setProfile((current) => current ? { ...updated, RiderAvailability: current.RiderAvailability } : updated)} onSignOut={() => void signOut()} onHistory={() => setView('history')} />}
       </main>
+      <nav className="bottom-nav" aria-label="Primary">
+        {([
+          { id: 'dashboard', label: 'Home', icon: 'home', badge: 0 },
+          { id: 'requests', label: 'Requests', icon: 'orders', badge: offers.length },
+          { id: 'active', label: 'Active', icon: 'route', badge: assignments.filter((item) => ['RIDER_ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY'].includes(item.Order.status)).length },
+          { id: 'earnings', label: 'Earnings', icon: 'wallet', badge: 0 },
+          { id: 'profile', label: 'Account', icon: 'user', badge: 0 },
+        ] as { id: RiderView; label: string; icon: string; badge: number }[]).map((item) => (
+          <button key={item.id} type="button" className={`bottom-nav__item ${view === item.id || (item.id === 'profile' && view === 'history') ? 'bottom-nav__item--active' : ''}`} aria-current={view === item.id ? 'page' : undefined} onClick={() => { setView(item.id); window.scrollTo({ top: 0 }); }}>
+            <span className="bottom-nav__icon"><Icon name={item.icon} />{item.badge > 0 && <span className="bottom-nav__badge">{item.badge}</span>}</span>
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }
@@ -592,7 +610,7 @@ function HistoryPage({ assignments, loading }: { assignments: RiderAssignment[];
   return <section className="rider-content"><div className="shop-heading"><div><p>Completed work</p><h1>Delivery history</h1></div></div>{loading && !history.length ? <div className="empty-workspace" role="status">Loading delivery history…</div> : history.length ? <div className="delivery-list">{history.map((item) => <article className="delivery-request" key={item.id}><div><strong>{item.Order.reference}</strong><p>{item.Order.status.replaceAll('_', ' ')} · {new Date(item.assignedAt).toLocaleDateString()}</p></div><span>LKR {Number(item.earnings).toFixed(2)}</span></article>)}</div> : <div className="empty-workspace"><h2>No delivery history yet</h2><p>Completed and failed deliveries will appear here.</p></div>}</section>;
 }
 
-function ProfilePage({ profile, onSaved }: { profile: RiderProfile; onSaved: (profile: RiderProfile) => void }) {
+function ProfilePage({ profile, onSaved, onSignOut, onHistory }: { profile: RiderProfile; onSaved: (profile: RiderProfile) => void; onSignOut: () => void; onHistory: () => void }) {
   const [phone, setPhone] = useState(profile.phone ?? '');
   const [vehicleType, setVehicleType] = useState(profile.vehicleType ?? 'BIKE');
   const [registration, setRegistration] = useState(profile.registration ?? '');
@@ -617,7 +635,7 @@ function ProfilePage({ profile, onSaved }: { profile: RiderProfile; onSaved: (pr
       setBusy(false);
     }
   };
-  return <section className="rider-content"><div className="shop-heading"><div><p>Account</p><h1>Rider profile</h1></div></div><form className="rider-profile-form" onSubmit={(event) => void submit(event)}><div><span>Application status</span><strong>{profile.status.replaceAll('_', ' ')}</strong></div><label>Phone number<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} pattern="\\+94[0-9]{9}" required /></label><label>Vehicle type<select value={vehicleType} onChange={(event) => setVehicleType(event.target.value)}><option value="BIKE">Bike</option><option value="TUK">Tuk</option><option value="CAR">Car</option></select></label><label>Vehicle registration<input value={registration} onChange={(event) => setRegistration(event.target.value)} maxLength={40} /></label>{error && <p className="registration-error" role="alert">{error}</p>}{notice && <p className="rider-success" role="status">{notice}</p>}<button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save profile'}</button></form></section>;
+  return <section className="rider-content"><div className="shop-heading"><div><p>Account</p><h1>Rider profile</h1></div></div><form className="rider-profile-form" onSubmit={(event) => void submit(event)}><div><span>Application status</span><strong>{profile.status.replaceAll('_', ' ')}</strong></div><label>Phone number<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} pattern="\\+94[0-9]{9}" required /></label><label>Vehicle type<select value={vehicleType} onChange={(event) => setVehicleType(event.target.value)}><option value="BIKE">Bike</option><option value="TUK">Tuk</option><option value="CAR">Car</option></select></label><label>Vehicle registration<input value={registration} onChange={(event) => setRegistration(event.target.value)} maxLength={40} /></label>{error && <p className="registration-error" role="alert">{error}</p>}{notice && <p className="rider-success" role="status">{notice}</p>}<button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save profile'}</button></form><div className="account-actions"><button type="button" onClick={onHistory}><span><Icon name="history" /></span>Delivery history<Icon name="chevron" /></button><button type="button" className="account-actions__danger" onClick={onSignOut}><span><Icon name="logout" /></span>Sign out<Icon name="chevron" /></button></div></section>;
 }
 
 function EarningsPage() {
