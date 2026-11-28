@@ -46,6 +46,18 @@ export async function countPdfPages(document: Uint8Array): Promise<number> {
   return pageCount;
 }
 const CUSTOMER_PDF_KEY = /^private\/customers\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.pdf$/i;
+/**
+ * Each storage setting accepts the QuickDoc name or the standard AWS name, so either
+ * S3_BUCKET or AWS_S3_BUCKET (and so on) works in the host's environment settings.
+ */
+export const STORAGE_SETTING_NAMES = {
+  bucket: ['S3_BUCKET', 'AWS_S3_BUCKET'],
+  region: ['S3_REGION', 'AWS_REGION', 'AWS_DEFAULT_REGION'],
+  accessKeyId: ['S3_ACCESS_KEY_ID', 'AWS_ACCESS_KEY_ID'],
+  secretAccessKey: ['S3_SECRET_ACCESS_KEY', 'AWS_SECRET_ACCESS_KEY'],
+  endpoint: ['S3_ENDPOINT', 'AWS_S3_ENDPOINT'],
+} as const;
+
 const SHOP_CATALOG_PDF_KEY = new RegExp(CUSTOMER_PDF_KEY.source.replace('customers', 'shops'), 'i');
 
 @Injectable()
@@ -54,6 +66,14 @@ export class PrivateObjectStorageService {
   private readonly ephemeralSigningSecret = randomBytes(32);
 
   constructor(private readonly config: ConfigService) {}
+
+  private setting(names: readonly string[]): string | undefined {
+    for (const name of names) {
+      const value = this.config.get<string>(name)?.trim();
+      if (value) return value;
+    }
+    return undefined;
+  }
 
   private get isProduction(): boolean {
     return (this.config.get<string>('NODE_ENV') ?? process.env.NODE_ENV) === 'production';
@@ -73,17 +93,16 @@ export class PrivateObjectStorageService {
     }
 
     const hasAnyS3Config = [
-      'S3_BUCKET',
-      'S3_REGION',
-      'S3_ACCESS_KEY_ID',
-      'S3_SECRET_ACCESS_KEY',
-      'S3_ENDPOINT',
-    ].some((key) => Boolean(this.config.get<string>(key)));
+      STORAGE_SETTING_NAMES.bucket,
+      STORAGE_SETTING_NAMES.accessKeyId,
+      STORAGE_SETTING_NAMES.secretAccessKey,
+      STORAGE_SETTING_NAMES.endpoint,
+    ].some((names) => Boolean(this.setting(names)));
     return this.isProduction || hasAnyS3Config ? 's3' : 'local';
   }
 
   private get bucket(): string {
-    const bucket = this.config.get<string>('S3_BUCKET');
+    const bucket = this.setting(STORAGE_SETTING_NAMES.bucket);
     if (!bucket) throw new ServiceUnavailableException('Private document storage is not configured');
     return bucket;
   }
@@ -91,14 +110,14 @@ export class PrivateObjectStorageService {
   private getClient(): S3Client {
     if (this.client) return this.client;
 
-    const region = this.config.get<string>('S3_REGION');
-    const accessKeyId = this.config.get<string>('S3_ACCESS_KEY_ID');
-    const secretAccessKey = this.config.get<string>('S3_SECRET_ACCESS_KEY');
+    const region = this.setting(STORAGE_SETTING_NAMES.region);
+    const accessKeyId = this.setting(STORAGE_SETTING_NAMES.accessKeyId);
+    const secretAccessKey = this.setting(STORAGE_SETTING_NAMES.secretAccessKey);
     if (!region || !accessKeyId || !secretAccessKey) {
       throw new ServiceUnavailableException('Private document storage is not configured');
     }
 
-    const endpoint = this.config.get<string>('S3_ENDPOINT');
+    const endpoint = this.setting(STORAGE_SETTING_NAMES.endpoint);
     const forcePathStyle = this.config.get<string>('S3_FORCE_PATH_STYLE');
     this.client = new S3Client({
       region,

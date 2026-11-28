@@ -39,8 +39,15 @@ export function validateEnvironment(env: Environment = process.env): string[] {
     if (env.STORAGE_DRIVER === 'local') {
       errors.push('STORAGE_DRIVER=local is not allowed in production');
     }
-    const missingStorage = ['S3_BUCKET', 'S3_REGION', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']
-      .filter((key) => !env[key]);
+    const storageNames: [string, ...string[]][] = [
+      ['S3_BUCKET', 'AWS_S3_BUCKET'],
+      ['S3_REGION', 'AWS_REGION', 'AWS_DEFAULT_REGION'],
+      ['S3_ACCESS_KEY_ID', 'AWS_ACCESS_KEY_ID'],
+      ['S3_SECRET_ACCESS_KEY', 'AWS_SECRET_ACCESS_KEY'],
+    ];
+    const missingStorage = storageNames
+      .filter((names) => !names.some((name) => env[name]?.trim()))
+      .map((names) => names.join(' or '));
     if (missingStorage.length) {
       warnings.push(`Document uploads are unavailable until ${missingStorage.join(', ')} are configured`);
     }
