@@ -78,6 +78,28 @@ Customer registration and sign-in support email/password and Google OAuth. Googl
 
 Payments are cash on delivery. PayHere online payments and refunds are not enabled until the provider's production endpoint and response/status semantics can be verified; do not treat a recorded payment as refunded based on an unverified response.
 
+## Document storage (AWS S3)
+
+The API accepts either naming style for the storage variables:
+- `AWS_S3_BUCKET` or `S3_BUCKET`
+- `AWS_REGION` or `S3_REGION`
+- `AWS_ACCESS_KEY_ID` or `S3_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY` or `S3_SECRET_ACCESS_KEY`
+
+Browsers upload PDFs straight to the bucket with short-lived signed links, so the bucket also needs:
+
+1. **Block all public access** turned on. Every file is served through signed links only.
+2. **CORS**, in the bucket's Permissions tab, so the portals can upload:
+   ```json
+   [{
+     "AllowedOrigins": ["https://customer-web-murex-seven.vercel.app", "https://shop-web-gray.vercel.app"],
+     "AllowedMethods": ["PUT", "GET"],
+     "AllowedHeaders": ["Content-Type"],
+     "MaxAgeSeconds": 3000
+   }]
+   ```
+3. **An IAM user policy** allowing `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::<bucket>/private/*`.
+
 ## Order lifecycle and money flow
 
 1. **Order placed.** Pricing is always recomputed on the server. The page count is read from the stored PDF, and the delivery distance is calculated from the shop's coordinates to the customer's delivery coordinates. Orders beyond `MAX_DELIVERY_DISTANCE_KM` (default 50) are refused. A pending cash-on-delivery `Payment` is created, along with an encrypted pickup code and delivery PIN.
