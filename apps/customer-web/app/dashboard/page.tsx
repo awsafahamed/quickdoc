@@ -8,7 +8,7 @@ import AttestationRequestFlow, { type AttestationBookingResult } from './attesta
 
 type View = 'dashboard' | 'print' | 'attest' | 'orders' | 'documents' | 'addresses' | 'payments' | 'support' | 'profile';
 
-type IconName = 'home' | 'print' | 'shield' | 'orders' | 'file' | 'pin' | 'card' | 'help' | 'user' | 'bell' | 'arrow' | 'upload' | 'plus' | 'chevron';
+type IconName = 'grid' | 'home' | 'print' | 'shield' | 'orders' | 'file' | 'pin' | 'card' | 'help' | 'user' | 'bell' | 'arrow' | 'upload' | 'plus' | 'chevron';
 
 const navigation: { id: View; label: string; icon: IconName }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'home' },
@@ -101,6 +101,7 @@ function Icon({ name }: { name: IconName }) {
     shield: 'M12 3 20 6v5c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6l8-3zM9 12l2 2 4-4',
     orders: 'M6 3h12v18H6zM9 7h6M9 11h6M9 15h4',
     file: 'M6 2h8l4 4v16H6zM14 2v5h5M9 12h6M9 16h6',
+    grid: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',
     pin: 'M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12zM12 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
     card: 'M3 6h18v13H3zM3 10h18M7 15h4',
     help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9a2.5 2.5 0 1 1 4.2 1.8c-1.1.8-1.7 1.3-1.7 2.7M12 17h.01',
@@ -185,6 +186,7 @@ function UploadBox({ label, onChange }: { label: string; onChange: (event: Chang
 export default function CustomerDashboardPage() {
   const [view, setView] = useState<View>('dashboard');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [apiState, setApiState] = useState<'loading' | 'connected' | 'unavailable'>('loading');
   const [uploadedFile, setUploadedFile] = useState<string | null>(null);
   const [session, setSession] = useState<{ name: string; email: string; phone: string } | null>(null);
@@ -319,6 +321,8 @@ export default function CustomerDashboardPage() {
   const goTo = (nextView: View) => {
     setView(nextView);
     setMobileNavOpen(false);
+    setMoreOpen(false);
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0 });
   };
 
   const currentLabel = view === 'profile' ? 'My profile' : navigation.find((item) => item.id === view)?.label ?? 'Dashboard';
@@ -447,12 +451,45 @@ export default function CustomerDashboardPage() {
         </div>
       </aside>
 
+      <nav className="bottom-nav" aria-label="Primary">
+        {([
+          { id: 'dashboard', label: 'Home', icon: 'home' },
+          { id: 'print', label: 'Print', icon: 'print' },
+          { id: 'orders', label: 'Orders', icon: 'orders' },
+          { id: 'attest', label: 'Attest', icon: 'shield' },
+        ] as { id: View; label: string; icon: IconName }[]).map((item) => (
+          <button key={item.id} type="button" className={`bottom-nav__item ${view === item.id && !moreOpen ? 'bottom-nav__item--active' : ''}`} aria-current={view === item.id ? 'page' : undefined} onClick={() => goTo(item.id)}>
+            <span className="bottom-nav__icon"><Icon name={item.icon} />{item.id === 'orders' && customerOrders.filter(isActive).length > 0 && <span className="bottom-nav__badge">{customerOrders.filter(isActive).length}</span>}</span>
+            <span>{item.label}</span>
+          </button>
+        ))}
+        <button type="button" className={`bottom-nav__item ${moreOpen || ['documents', 'addresses', 'payments', 'support', 'profile'].includes(view) ? 'bottom-nav__item--active' : ''}`} aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}>
+          <span className="bottom-nav__icon"><Icon name="grid" /></span><span>More</span>
+        </button>
+      </nav>
+      {moreOpen && <div className="sheet-layer">
+        <button className="sheet-backdrop" type="button" aria-label="Close menu" onClick={() => setMoreOpen(false)} />
+        <div className="bottom-sheet" role="dialog" aria-label="More">
+          <span className="bottom-sheet__handle" aria-hidden="true" />
+          <div className="bottom-sheet__account"><span className="avatar">{initials}</span><span><strong>{customerName}</strong><small>{session?.email}</small></span></div>
+          {([
+            { id: 'documents', label: 'My documents', icon: 'file' },
+            { id: 'addresses', label: 'Addresses', icon: 'pin' },
+            { id: 'payments', label: 'Payments', icon: 'card' },
+            { id: 'support', label: 'Help & support', icon: 'help' },
+            { id: 'profile', label: 'Profile & security', icon: 'user' },
+          ] as { id: View; label: string; icon: IconName }[]).map((item) => (
+            <button key={item.id} type="button" className="bottom-sheet__item" onClick={() => goTo(item.id)}><span className="bottom-sheet__icon"><Icon name={item.icon} /></span><span>{item.label}</span><Icon name="chevron" /></button>
+          ))}
+        </div>
+      </div>}
       {mobileNavOpen && <button className="nav-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
       <div className="portal-main">
         <header className="topbar">
           <button className="mobile-menu" type="button" aria-label="Open navigation" onClick={() => setMobileNavOpen((open) => !open)}><span /><span /><span /></button>
           <div className="breadcrumb"><span>Workspace</span><Icon name="chevron" /><strong>{currentLabel}</strong></div>
-          <div className="topbar__actions"><div className="notification-wrap"><button className="notification-button" type="button" aria-label={`${notifications.filter((item) => item.unread).length} unread notifications`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Icon name="bell" />{notifications.some((item) => item.unread) && <span />}</button>{notificationsOpen && <div className="notification-panel" role="dialog" aria-label="Notifications"><div className="notification-heading"><strong>Notifications</strong><button type="button" disabled={!notifications.some((item) => item.unread)} onClick={() => void markAllNotificationsRead().catch((caught: unknown) => setOrderError(caught instanceof Error ? caught.message : 'Notifications could not be marked as read.'))}>Mark all read</button></div>{notifications.length ? notifications.map((item) => <button className={`notification-item ${item.unread ? 'notification-item--unread' : ''}`} key={item.id} type="button" onClick={() => { if (item.unread) void markNotificationRead(item.id).catch((caught: unknown) => setOrderError(caught instanceof Error ? caught.message : 'Notification could not be marked as read.')); }}><span className="notification-item__mark" /><span><strong>{item.title}</strong><p>{item.text}</p><small>{item.time}</small></span></button>) : <p className="notification-empty">No notifications yet.</p>}</div>}</div><div className="topbar__avatar">{initials}</div></div>
+          <div className="app-title"><img src="/logo/quickdoc-logo.svg" alt="" aria-hidden="true" /><strong>{view === 'dashboard' ? 'QuickDoc' : currentLabel}</strong></div>
+          <div className="topbar__actions"><div className="notification-wrap"><button className="notification-button" type="button" aria-label={`${notifications.filter((item) => item.unread).length} unread notifications`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Icon name="bell" />{notifications.some((item) => item.unread) && <span />}</button>{notificationsOpen && <div className="notification-panel" role="dialog" aria-label="Notifications"><div className="notification-heading"><strong>Notifications</strong><button type="button" disabled={!notifications.some((item) => item.unread)} onClick={() => void markAllNotificationsRead().catch((caught: unknown) => setOrderError(caught instanceof Error ? caught.message : 'Notifications could not be marked as read.'))}>Mark all read</button></div>{notifications.length ? notifications.map((item) => <button className={`notification-item ${item.unread ? 'notification-item--unread' : ''}`} key={item.id} type="button" onClick={() => { if (item.unread) void markNotificationRead(item.id).catch((caught: unknown) => setOrderError(caught instanceof Error ? caught.message : 'Notification could not be marked as read.')); }}><span className="notification-item__mark" /><span><strong>{item.title}</strong><p>{item.text}</p><small>{item.time}</small></span></button>) : <p className="notification-empty">No notifications yet.</p>}</div>}</div><button className="topbar__avatar" type="button" aria-label="My profile" onClick={() => goTo('profile')}>{initials}</button></div>
         </header>
 
         <main className="content">

@@ -13,3 +13,60 @@
 .cash-collect strong { font-size: 22px; }
 .earnings-grid article small { display: block; margin-top: 6px; opacity: 0.7; font-size: 12px; }
 .registration-mark img { width: 28px; height: 28px; }
+
+/* ===== App shell & card system (production UI pass) ===== */
+:root { --radius-card: 16px; --radius-control: 10px; --shadow-card: 0 1px 2px #17212b0a, 0 4px 16px #17212b08; --bottom-nav-h: 64px; --green: #159570; }
+.rider-status-card, .rider-empty-card, .delivery-request, .delivery-detail-card, .handover-panel, .rider-profile-form, .rider-metrics > *, .earnings-grid article, .empty-workspace { border-radius: var(--radius-card) !important; box-shadow: var(--shadow-card); }
+.delivery-request { transition: box-shadow .15s ease, transform .15s ease; }
+.delivery-request:hover { transform: translateY(-1px); box-shadow: 0 2px 4px #17212b0d, 0 10px 28px #17212b12; }
+.handover-panel button, .rider-profile-form button, .delivery-request button { min-height: 44px; border-radius: var(--radius-control); }
+.handover-panel input, .handover-panel textarea, .rider-profile-form input, .rider-profile-form select { border-radius: var(--radius-control); }
+.handover-panel input[autocomplete="one-time-code"] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 22px; letter-spacing: .3em; text-align: center; text-transform: uppercase; }
+.app-title, .bottom-nav { display: none; }
+.account-actions { display: grid; margin-top: 16px; overflow: hidden; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.account-actions button { display: grid; grid-template-columns: 36px 1fr auto; align-items: center; gap: 12px; min-height: 56px; padding: 8px 16px; color: var(--ink); background: none; border: 0; border-bottom: 1px solid var(--line); font: inherit; font-size: 15px; font-weight: 600; text-align: left; cursor: pointer; }
+.account-actions button:last-child { border-bottom: 0; }
+.account-actions button > span { display: grid; place-items: center; width: 36px; height: 36px; color: var(--blue); background: var(--blue-soft); border-radius: 10px; }
+.account-actions button > svg:last-child { color: #a3adb8; }
+.account-actions__danger { color: #c4362f !important; }
+.account-actions__danger > span { color: #c4362f !important; background: #fdecec !important; }
+.account-actions { display: none; }
+
+@media (max-width: 680px) {
+  body { background: var(--surface); }
+  .rider-sidebar, .rider-menu, .mobile-backdrop, .breadcrumb, .rider-sign-out { display: none !important; }
+  .rider-main { width: 100%; margin: 0; }
+  .topbar { position: sticky; top: 0; z-index: 20; height: calc(56px + env(safe-area-inset-top)) !important; padding: env(safe-area-inset-top) 16px 0 !important; background: #ffffffeb !important; backdrop-filter: saturate(180%) blur(14px); -webkit-backdrop-filter: saturate(180%) blur(14px); }
+  .app-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .app-title img { width: 26px; height: 26px; object-fit: contain; object-position: left; }
+  .app-title strong { overflow: hidden; font-size: 17px; font-weight: 800; letter-spacing: -.02em; white-space: nowrap; text-overflow: ellipsis; }
+  .topbar__actions { gap: 8px !important; }
+  .availability-button { min-height: 34px; padding: 0 12px !important; border-radius: 17px !important; font-size: 13px !important; }
+  .rider-content { padding: 20px 16px calc(var(--bottom-nav-h) + 28px + env(safe-area-inset-bottom)) !important; }
+  .shop-heading { align-items: flex-start; gap: 12px; }
+  .shop-heading p { margin-bottom: 6px; }
+  .shop-heading h1 { font-size: 26px !important; line-height: 1.15; }
+  .registration-error { margin: 12px 16px 0; padding: 10px 12px; border-radius: 12px; background: #fff7ed; font-size: 13px; }
+  .account-actions { display: grid; }
+  input, select, textarea { font-size: 16px !important; }
+  .handover-panel input[autocomplete="one-time-code"] { font-size: 24px !important; }
+  .rider-notification-panel { position: fixed !important; top: calc(60px + env(safe-area-inset-top)) !important; right: 12px !important; left: 12px !important; width: auto !important; max-height: 70vh; overflow: auto; border-radius: var(--radius-card); }
+
+  .bottom-nav { position: fixed; right: 0; bottom: 0; left: 0; z-index: 30; display: grid; grid-template-columns: repeat(5, 1fr); height: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom)); padding: 6px 6px env(safe-area-inset-bottom); background: #ffffffF2; backdrop-filter: saturate(180%) blur(14px); -webkit-backdrop-filter: saturate(180%) blur(14px); border-top: 1px solid var(--line); box-shadow: 0 -6px 20px #17212b0a; }
+  .bottom-nav__item { display: grid; justify-items: center; align-content: center; gap: 3px; min-width: 0; padding: 4px 0; color: var(--muted); background: none; border: 0; font: inherit; font-size: 11px; font-weight: 600; -webkit-tap-highlight-color: transparent; }
+  .bottom-nav__icon { position: relative; display: grid; place-items: center; width: 52px; height: 30px; border-radius: 15px; transition: background .15s ease; }
+  .bottom-nav__icon svg { width: 22px; height: 22px; }
+  .bottom-nav__item--active { color: var(--blue); }
+  .bottom-nav__item--active .bottom-nav__icon { background: var(--blue-soft); }
+  .bottom-nav__badge { position: absolute; top: -2px; right: 6px; min-width: 17px; height: 17px; padding: 0 5px; color: #fff; background: #e5484d; border: 2px solid #fff; border-radius: 9px; font-size: 10px; font-weight: 700; line-height: 13px; }
+}
+@media (max-width: 680px) { .app-title img { display: none; } }
+@media (max-width: 680px) {
+  .rider-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; gap: 10px; margin-top: 18px; }
+  .rider-metrics article { display: grid; align-content: space-between; min-height: 112px; padding: 14px 12px !important; }
+  .rider-metrics article > span { font-size: 12px; line-height: 1.25; }
+  .rider-metrics article > strong { margin: 6px 0; font-size: 26px; }
+  .rider-metrics button { justify-self: start; min-height: 32px; font-size: 12px; }
+  .rider-dashboard-grid { gap: 12px !important; margin-top: 12px !important; }
+  .rider-status-card, .rider-empty-card { min-height: 0 !important; padding: 18px !important; }
+}
