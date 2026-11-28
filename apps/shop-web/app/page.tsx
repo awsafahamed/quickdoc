@@ -1,5 +1,6 @@
 'use client';
 
+import { geocodeAddress } from './geocode';
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 
 type View =
@@ -307,6 +308,21 @@ function RegistrationPage({ onReady, initialMode = 'login', initialError = '' }:
   const [locationError, setLocationError] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const [locating, setLocating] = useState(false);
+  const findAddress = async () => {
+    setLocationError('');
+    if (address.trim().length < 5) { setLocationError('Enter the shop address first.'); return; }
+    setLocating(true);
+    try {
+      const found = await geocodeAddress(address);
+      setLatitude(found.latitude.toFixed(6));
+      setLongitude(found.longitude.toFixed(6));
+      setLocationError(`Found: ${found.formattedAddress}. Check this is your shop before continuing.`);
+    } catch (reason) {
+      setLocationError(reason instanceof Error ? reason.message : 'Address lookup is unavailable.');
+    } finally { setLocating(false); }
+  };
+
   const useCurrentLocation = () => {
     setLocationError('');
     if (!navigator.geolocation) { setLocationError('Location is unavailable in this browser. Enter the coordinates for your shop.'); return; }
@@ -392,7 +408,7 @@ function RegistrationPage({ onReady, initialMode = 'login', initialError = '' }:
       {(mode === 'login' || mode === 'register') && <div className="auth-switch" role="tablist" aria-label="Account action"><button type="button" role="tab" aria-selected={mode === 'login'} className={mode === 'login' ? 'selected' : ''} onClick={() => { setMode('login'); setError(''); setMessage(''); }}>Sign in</button><button type="button" role="tab" aria-selected={mode === 'register'} className={mode === 'register' ? 'selected' : ''} onClick={() => { setMode('register'); setError(''); setMessage(''); }}>Create shop account</button></div>}
       <h2>{mode === 'login' ? 'Welcome back' : mode === 'forgot' ? 'Reset your password' : mode === 'setup' ? 'Finish shop setup' : 'Set up your shop'}</h2><p className="auth-subtitle">{mode === 'login' ? 'Sign in to pick up where you left off.' : mode === 'forgot' ? 'We will email a secure reset link if this account exists.' : mode === 'setup' ? 'Your account is signed in. Add the shop details needed to use the workspace.' : 'Start with your business details. New shops are reviewed before they can accept orders.'}</p>
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
-        {(mode === 'register' || mode === 'setup') && <><label>Business name<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your print shop" autoComplete="organization" /></label><label>Business phone<input required minLength={7} maxLength={20} value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" /></label><label>Shop address<input required minLength={5} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street, building and city" autoComplete="street-address" /></label><div className="location-fields"><button className="button button--secondary" type="button" onClick={useCurrentLocation}>Use current location</button><label>Latitude<input required type="number" step="any" min="-90" max="90" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="6.9271" /></label><label>Longitude<input required type="number" step="any" min="-180" max="180" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="79.8612" /></label></div>{locationError && <p className="form-error" role="alert">{locationError}</p>}</>}
+        {(mode === 'register' || mode === 'setup') && <><label>Business name<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Your print shop" autoComplete="organization" /></label><label>Business phone<input required minLength={7} maxLength={20} value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" /></label><label>Shop address<input required minLength={5} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street, building and city" autoComplete="street-address" /></label><div className="location-fields"><button className="button button--secondary" type="button" disabled={locating} onClick={() => void findAddress()}>{locating ? 'Finding…' : 'Find address on map'}</button><button className="button button--secondary" type="button" onClick={useCurrentLocation}>Use current location</button><label>Latitude<input required type="number" step="any" min="-90" max="90" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="6.9271" /></label><label>Longitude<input required type="number" step="any" min="-180" max="180" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="79.8612" /></label></div>{locationError && <p className="form-error" role="alert">{locationError}</p>}</>}
         {(mode === 'login' || mode === 'register' || mode === 'forgot') && <label>Business email<input required type="email" maxLength={254} autoComplete="email" value={email} onChange={(event) => { setEmail(event.target.value); setError(''); }} placeholder="you@business.com" /></label>}
         {(mode === 'login' || mode === 'register') && <label>Password<input required type="password" minLength={mode === 'register' ? 8 : undefined} maxLength={128} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => { setPassword(event.target.value); setError(''); }} placeholder={mode === 'register' ? 'At least 8 characters' : 'Your password'} /></label>}
         {error && <p className="form-error" role="alert">{error}</p>}
@@ -1014,6 +1030,16 @@ function ProfilePage({ shop, onSave }: { shop: ShopProfile; onSave: (shop: ShopP
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState('');
   const [error, setError] = useState('');
+  const [locating, setLocating] = useState(false);
+  const locateAddress = async () => {
+    setError(''); setSaved(''); setLocating(true);
+    try {
+      const found = await geocodeAddress(form.address);
+      setForm((current) => ({ ...current, latitude: found.latitude, longitude: found.longitude }));
+      setSaved(`Location updated from address: ${found.formattedAddress}. Save to apply.`);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Address lookup is unavailable.'); }
+    finally { setLocating(false); }
+  };
   const saveProfile = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError(''); setSaved('');
     try { const result = await api<Envelope<ShopProfile>>('/shop/me', { method: 'PATCH', json: form }); onSave(result.data); setSaved('Shop profile updated.'); }
@@ -1027,7 +1053,7 @@ function ProfilePage({ shop, onSave }: { shop: ShopProfile; onSave: (shop: ShopP
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Opening hours could not be saved.'); }
   };
   return <section className="content"><PageHeader title="Shop profile" description="Keep your public business details and opening hours accurate." />
-    <div className="profile-layout"><form className="panel profile-form" onSubmit={(event) => void saveProfile(event)}><div className="panel-heading"><div><h2>Business details</h2><p>Shown to customers when they choose a print shop.</p></div><StatusBadge status={shop.status} /></div><label>Shop name<input required minLength={2} maxLength={120} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label>Business address<input required minLength={5} maxLength={500} value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label><label>Phone<input required minLength={7} maxLength={20} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><div className="form-grid"><label>Latitude<input required type="number" min="-90" max="90" step="0.0000001" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: Number(event.target.value) })} /></label><label>Longitude<input required type="number" min="-180" max="180" step="0.0000001" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: Number(event.target.value) })} /></label></div><div className="form-end"><button className="button button--primary" disabled={busy}>{busy ? 'Saving…' : 'Save business details'}</button>{saved && <span className="success-message" role="status">{saved}</span>}</div>{error && <LoadError message={error} />}</form>
+    <div className="profile-layout"><form className="panel profile-form" onSubmit={(event) => void saveProfile(event)}><div className="panel-heading"><div><h2>Business details</h2><p>Shown to customers when they choose a print shop.</p></div><StatusBadge status={shop.status} /></div><label>Shop name<input required minLength={2} maxLength={120} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label>Business address<input required minLength={5} maxLength={500} value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label><button className="button button--secondary" type="button" disabled={locating || form.address.trim().length < 5} onClick={() => void locateAddress()}>{locating ? 'Finding…' : 'Update location from address'}</button><label>Phone<input required minLength={7} maxLength={20} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><div className="form-grid"><label>Latitude<input required type="number" min="-90" max="90" step="0.0000001" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: Number(event.target.value) })} /></label><label>Longitude<input required type="number" min="-180" max="180" step="0.0000001" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: Number(event.target.value) })} /></label></div><div className="form-end"><button className="button button--primary" disabled={busy}>{busy ? 'Saving…' : 'Save business details'}</button>{saved && <span className="success-message" role="status">{saved}</span>}</div>{error && <LoadError message={error} />}</form>
       <section className="panel hours-panel"><div className="panel-heading"><div><h2>Opening hours</h2><p>Set a regular schedule for each day.</p></div></div>{hoursError && <LoadError message={hoursError} retry={reloadHours} />}{hoursLoading ? <LoadingRows count={3} /> : weekdays.map((day, index) => { const hour = hourDrafts[index] ?? hours.find((item) => item.dayOfWeek === index) ?? { dayOfWeek: index, opensAt: '09:00', closesAt: '18:00', isClosed: true }; return <div className="hour-row" key={day}><strong>{day}</strong><label className="toggle-control"><input type="checkbox" checked={!hour.isClosed} onChange={(event) => setHourDrafts((drafts) => ({ ...drafts, [index]: { ...hour, isClosed: !event.target.checked } }))} /><span /><b>{hour.isClosed ? 'Closed' : 'Open'}</b></label><input type="time" aria-label={`${day} opening time`} disabled={hour.isClosed} value={hour.opensAt} onChange={(event) => setHourDrafts((drafts) => ({ ...drafts, [index]: { ...hour, opensAt: event.target.value } }))} /><span className="hour-to">to</span><input type="time" aria-label={`${day} closing time`} disabled={hour.isClosed} value={hour.closesAt} onChange={(event) => setHourDrafts((drafts) => ({ ...drafts, [index]: { ...hour, closesAt: event.target.value } }))} /><button className="text-button" type="button" onClick={() => void saveHour(index)}>Save</button></div>; })}</section></div>
   </section>;
 }

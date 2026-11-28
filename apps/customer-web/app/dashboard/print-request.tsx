@@ -1,5 +1,6 @@
 'use client';
 
+import { geocodeAddress, type GeocodedAddress as FoundAddress } from '../geocode';
 import { ChangeEvent, DragEvent, useEffect, useState } from 'react';
 
 type ViewStep = 1 | 2 | 3;
@@ -64,6 +65,7 @@ export type PrintOrderSummary = {
   shopName: string;
 };
 
+type GeocodedAddress = FoundAddress & { forAddress: string };
 type SavedAddress = { id: string; label: string; line: string; latitude?: number | string | null; longitude?: number | string | null };
 
 function Icon({ name }: { name: 'file' | 'upload' | 'print' | 'arrow' | 'chevron' | 'shield' }) {
@@ -183,8 +185,25 @@ export default function PrintRequestFlow({
   const savedAddressLocation = selectedSavedAddress?.latitude != null && selectedSavedAddress.longitude != null
     ? { latitude: Number(selectedSavedAddress.latitude), longitude: Number(selectedSavedAddress.longitude) }
     : null;
+  const [addressLocation, setAddressLocation] = useState<GeocodedAddress | null>(null);
+  const [locatingAddress, setLocatingAddress] = useState(false);
   // Delivery is priced from the shop to this point, so an order needs real coordinates.
-  const deliveryLocation = savedAddressLocation ?? customerLocation;
+  const deliveryLocation = savedAddressLocation
+    ?? (addressMode === 'custom' && addressLocation && addressLocation.forAddress === customAddress.trim() ? addressLocation : null)
+    ?? customerLocation;
+  const locateCustomAddress = async () => {
+    setLocationMessage('');
+    setLocatingAddress(true);
+    try {
+      const found = await geocodeAddress(customAddress);
+      setAddressLocation({ ...found, forAddress: customAddress.trim() });
+      setLocationMessage(`Found: ${found.formattedAddress}. Check this is right before placing your request.`);
+    } catch (cause) {
+      setLocationMessage(cause instanceof Error ? cause.message : 'Address lookup is unavailable. Use your current location instead.');
+    } finally {
+      setLocatingAddress(false);
+    }
+  };
 
   useEffect(() => {
     if (!file) {
@@ -640,9 +659,12 @@ export default function PrintRequestFlow({
               <strong>Delivery location</strong>
               {savedAddressLocation
                 ? <span>Using the location saved with this address.</span>
-                : customerLocation
+                : deliveryLocation && deliveryLocation !== customerLocation
+                  ? <span>Using the map location found for this address.</span>
+                  : customerLocation
                   ? <span>Using your current location ({customerLocation.latitude.toFixed(4)}, {customerLocation.longitude.toFixed(4)}).</span>
                   : <span>Required so the rider can find you and delivery is priced by real distance.</span>}
+              {!savedAddressLocation && addressMode === 'custom' && <button className="button button--secondary button--small" type="button" disabled={busy || locatingAddress || customAddress.trim().length < 5} onClick={() => void locateCustomAddress()}>{locatingAddress ? 'Finding…' : 'Find this address on the map'}</button>}
               {!savedAddressLocation && <button className="button button--secondary button--small" type="button" disabled={busy} onClick={requestCustomerLocation}>{customerLocation ? 'Update my location' : 'Use my current location'}</button>}
               {locationMessage && <small role="status">{locationMessage}</small>}
             </div>

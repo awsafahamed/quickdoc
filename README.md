@@ -94,6 +94,14 @@ Payments are cash on delivery. PayHere online payments and refunds are not enabl
 
 Attestation bookings follow the same pattern. Customers can cancel before collection. Agents move a job through received, processing, attested, ready for return, and returned. The final step completes the job, creates the agent's payout, and notifies the customer at each stage.
 
+## Address lookup (Google Maps)
+
+The customer and shop portals look addresses up on Google's map through a server-side route, `/api/geocode`. Customers can find a typed delivery address without sharing their device location, saved addresses are pinned on the map automatically, and shops can fill in their coordinates from their address.
+
+Set `GOOGLE_MAPS_API_KEY` in the Vercel projects for **customer-web** and **shop-web**, for all environments, then redeploy. Keep the name exactly that: **do not** add a `NEXT_PUBLIC_` prefix, because that would publish the key to every browser. In Google Cloud, enable the **Geocoding API** and restrict the key to that API only. Results are biased to Sri Lanka; set `GOOGLE_MAPS_REGION` to change this.
+
+Without the key, the portals fall back to the device-location buttons. The route accepts same-origin requests only and allows 20 lookups per minute per IP per server instance.
+
 ## Production operations
 
 - **Security headers and limits.** The API sends Helmet security headers and caps JSON bodies at 100 KB. It applies a per-IP rate limit of `RATE_LIMIT_PER_MINUTE` (default 240), with much tighter limits on login, registration and password reset. Render terminates TLS at one proxy hop; set `TRUST_PROXY_HOPS` if that changes, so rate limits see real client IPs.

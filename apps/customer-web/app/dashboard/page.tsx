@@ -1,5 +1,6 @@
 'use client';
 
+import { geocodeAddress } from '../geocode';
 import { ChangeEvent, useEffect, useState } from 'react';
 import CustomerSupportPage from './support-page';
 import PrintRequestFlow, { type PrintOrderSummary, type SavedDocument } from './print-request';
@@ -565,8 +566,14 @@ function AddressPage({ addresses, onChanged }: { addresses: SavedAddressRow[]; o
     if (!label.trim() || line.trim().length < 5) { setError('Enter a label and complete address.'); return; }
     const accessToken = window.sessionStorage.getItem('print-attest-access-token');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+    // Pin the address from the map when the customer did not capture their location.
+    let pinned = location;
+    if (!pinned) {
+      try { const found = await geocodeAddress(line); pinned = { latitude: found.latitude, longitude: found.longitude }; }
+      catch { pinned = null; }
+    }
     try {
-      const response = await fetch(`${apiUrl}/customer/addresses`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken ?? ''}` }, body: JSON.stringify({ label: label.trim(), line: line.trim(), ...(location ?? {}) }) });
+      const response = await fetch(`${apiUrl}/customer/addresses`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken ?? ''}` }, body: JSON.stringify({ label: label.trim(), line: line.trim(), ...(pinned ?? {}) }) });
       if (!response.ok) throw new Error('Address could not be saved');
       const result = await response.json() as { data: SavedAddressRow };
       onChanged([result.data, ...addresses]);
@@ -584,7 +591,7 @@ function AddressPage({ addresses, onChanged }: { addresses: SavedAddressRow[]; o
     const response = await fetch(`${apiUrl}/customer/addresses/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken ?? ''}` } });
     if (response.ok) onChanged(addresses.filter((address) => address.id !== id));
   };
-  return <section className="simple-page"><p className="section-label">Workspace</p><h1>Addresses</h1><p className="simple-page__description">Manage pickup and delivery locations.</p><div className="address-layout"><div className="panel address-form"><h2>Add a new address</h2><label className="field-label">Label<input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Home or office" /></label><label className="field-label">Address<input value={line} onChange={(event) => setLine(event.target.value)} placeholder="Street, building and city" /></label><div className="delivery-location"><strong>Pin this address</strong><span>{location ? `Location saved (${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}). Stand at this address when capturing it.` : 'Optional. Lets you check out without sharing your location each time.'}</span><button className="button button--secondary button--small" type="button" disabled={locating} onClick={captureLocation}>{locating ? 'Locating…' : location ? 'Capture again' : 'Use my current location'}</button></div>{error && <p className="quote-error">{error}</p>}<button className="button button--primary" type="button" onClick={addAddress}>Save address</button></div><div className="address-list">{addresses.length ? addresses.map((address) => <div className="address-row" key={address.id}><span className="address-icon"><Icon name="pin" /></span><span><strong>{address.label}</strong><small>{address.line}{address.latitude != null ? ' · location pinned' : ''}</small></span><button type="button" aria-label={`Delete ${address.label}`} onClick={() => deleteAddress(address.id)}>×</button></div>) : <div className="empty-panel"><h3>No saved addresses</h3><p>Add an address for faster checkout.</p></div>}</div></div></section>;
+  return <section className="simple-page"><p className="section-label">Workspace</p><h1>Addresses</h1><p className="simple-page__description">Manage pickup and delivery locations.</p><div className="address-layout"><div className="panel address-form"><h2>Add a new address</h2><label className="field-label">Label<input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Home or office" /></label><label className="field-label">Address<input value={line} onChange={(event) => setLine(event.target.value)} placeholder="Street, building and city" /></label><div className="delivery-location"><strong>Pin this address</strong><span>{location ? `Location saved (${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}). Stand at this address when capturing it.` : 'Optional. If you skip this, we look the address up on the map when you save it.'}</span><button className="button button--secondary button--small" type="button" disabled={locating} onClick={captureLocation}>{locating ? 'Locating…' : location ? 'Capture again' : 'Use my current location'}</button></div>{error && <p className="quote-error">{error}</p>}<button className="button button--primary" type="button" onClick={addAddress}>Save address</button></div><div className="address-list">{addresses.length ? addresses.map((address) => <div className="address-row" key={address.id}><span className="address-icon"><Icon name="pin" /></span><span><strong>{address.label}</strong><small>{address.line}{address.latitude != null ? ' · location pinned' : ''}</small></span><button type="button" aria-label={`Delete ${address.label}`} onClick={() => deleteAddress(address.id)}>×</button></div>) : <div className="empty-panel"><h3>No saved addresses</h3><p>Add an address for faster checkout.</p></div>}</div></div></section>;
 }
 
 function DocumentLibrary({ documents, onChanged, onStartPrint }: { documents: SavedDocument[]; onChanged: (documents: SavedDocument[]) => void; onStartPrint: () => void }) {
