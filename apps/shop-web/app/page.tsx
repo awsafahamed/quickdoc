@@ -59,6 +59,8 @@ type Order = {
   DeliveryAssignment?: { id: string; riderId: string; earnings: number | string; updatedAt: string } | null;
   DeliveryOffer?: { id: string }[];
   Payment?: { status: string; method: string; amount: number | string } | null;
+  pickupCode?: string | null;
+  handoverLocked?: boolean;
 };
 
 type Settlement = {
@@ -149,7 +151,8 @@ const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frida
 async function api<T>(path: string, options: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers = new Headers(options.headers);
   const token = window.sessionStorage.getItem('shop-access-token');
-  if (token) headers.set('Authorization', `Bearer ${token}`);
+  // With only a stored refresh token (e.g. a new tab), the session interceptor renews it.
+  if (token || window.localStorage.getItem('shop-refresh-token')) headers.set('Authorization', `Bearer ${token ?? ''}`);
   if (options.json !== undefined) headers.set('Content-Type', 'application/json');
   let response: Response;
   try {
@@ -250,7 +253,7 @@ export default function ShopPortal() {
   const [authError, setAuthError] = useState('');
   useEffect(() => {
     const token = window.sessionStorage.getItem('shop-access-token');
-    if (!token) { setAuth('anonymous'); return; }
+    if (!token && !window.localStorage.getItem('shop-refresh-token')) { setAuth('anonymous'); return; }
     let active = true;
     const restore = async () => {
       try {
@@ -614,6 +617,18 @@ function DeliveryPage() {
   const [actionError, setActionError] = useState('');
   const [message, setMessage] = useState('');
   const deliveries = orders.filter((order) => ['READY_FOR_PICKUP', 'RIDER_ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETED'].includes(order.status));
+  const [codes, setCodes] = useState<Record<string, string>>({});
+  const reissueCode = async (order: Order) => {
+    setActionError('');
+    setMessage('');
+    try {
+      const result = await api<Envelope<{ pickupCode: string }>>(`/shop/me/orders/${encodeURIComponent(order.id)}/pickup-code`, { method: 'POST' });
+      setCodes((current) => ({ ...current, [order.id]: result.data.pickupCode }));
+      setMessage(`New pickup code for ${order.reference}. The previous code no longer works.`);
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : 'A new pickup code could not be issued.');
+    }
+  };
   const dispatch = async (order: Order) => {
     setDispatching(order.id);
     setActionError('');
@@ -630,7 +645,7 @@ function DeliveryPage() {
       setDispatching('');
     }
   };
-  return <section className="content"><PageHeader title="Delivery handover" description="Nearby approved riders are notified when an order is ready. Pickup codes and delivery PINs remain private to the assigned rider." />{error && <LoadError message={error} retry={reload} />}{actionError && <LoadError message={actionError} />}{message && <p className="success-message" role="status">{message}</p>}{loading ? <div className="panel"><LoadingRows count={5} /></div> : deliveries.length ? <div className="panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Ready since</th><th>Rider assignment</th><th>Status</th><th className="align-right">Total</th></tr></thead><tbody>{deliveries.map((order) => <tr key={order.id}><td><strong className="order-reference">{order.reference}</strong></td><td>{order.customer.name}</td><td>{dateLabel(order.updatedAt)}</td><td>{order.DeliveryAssignment ? `Assigned · ${order.DeliveryAssignment.riderId.slice(0, 8)}` : order.status === 'READY_FOR_PICKUP' ? `${order.DeliveryOffer?.length ?? 0} rider offers pending` : 'Assignment unavailable'}</td><td><StatusBadge status={order.status} /></td><td className="align-right amount-cell">{money(order.total, order.currency)}{order.status === 'READY_FOR_PICKUP' && !order.DeliveryAssignment && !order.DeliveryOffer?.length && <button className="text-button dispatch-action" type="button" disabled={dispatching === order.id} onClick={() => void dispatch(order)}>{dispatching === order.id ? 'Notifying…' : 'Notify nearby riders'}</button>}</td></tr>)}</tbody></table></div><div className="delivery-note"><Icon name="delivery" size={18} /><p>Riders within 8 km with a recent location update are notified. The first rider to accept receives the delivery assignment.</p></div></div> : <EmptyState title="No deliveries in progress" body="Orders marked ready for pickup and their rider assignments will appear here." />}</section>;
+  return <section className="content"><PageHeader title="Delivery handover" description="Nearby approved riders are notified when an order is ready. Hand the order over only after the rider enters your pickup code in their app." />{error && <LoadError message={error} retry={reload} />}{actionError && <LoadError message={actionError} />}{message && <p className="success-message" role="status">{message}</p>}{loading ? <div className="panel"><LoadingRows count={5} /></div> : deliveries.length ? <div className="panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Ready since</th><th>Rider assignment</th><th>Pickup code</th><th>Status</th><th className="align-right">Total</th></tr></thead><tbody>{deliveries.map((order) => <tr key={order.id}><td><strong className="order-reference">{order.reference}</strong></td><td>{order.customer.name}</td><td>{dateLabel(order.updatedAt)}</td><td>{order.DeliveryAssignment ? `Assigned · ${order.DeliveryAssignment.riderId.slice(0, 8)}` : order.status === 'READY_FOR_PICKUP' ? `${order.DeliveryOffer?.length ?? 0} rider offers pending` : 'Assignment unavailable'}</td><td>{['READY_FOR_PICKUP', 'RIDER_ASSIGNED'].includes(order.status) ? <span className="pickup-code">{(codes[order.id] ?? order.pickupCode) ? <strong>{codes[order.id] ?? order.pickupCode}</strong> : <small>Not issued</small>}{order.handoverLocked && !codes[order.id] && <small className="pickup-code__locked">Locked after wrong attempts</small>}<button className="text-button" type="button" onClick={() => void reissueCode(order)}>{(codes[order.id] ?? order.pickupCode) ? 'New code' : 'Issue code'}</button></span> : <small>—</small>}</td><td><StatusBadge status={order.status} /></td><td className="align-right amount-cell">{money(order.total, order.currency)}{order.status === 'READY_FOR_PICKUP' && !order.DeliveryAssignment && !order.DeliveryOffer?.length && <button className="text-button dispatch-action" type="button" disabled={dispatching === order.id} onClick={() => void dispatch(order)}>{dispatching === order.id ? 'Notifying…' : 'Notify nearby riders'}</button>}</td></tr>)}</tbody></table></div><div className="delivery-note"><Icon name="delivery" size={18} /><p>Riders within 8 km with a recent location update are notified. The first rider to accept receives the delivery assignment.</p></div></div> : <EmptyState title="No deliveries in progress" body="Orders marked ready for pickup and their rider assignments will appear here." />}</section>;
 }
 
 function ServicesPage() {

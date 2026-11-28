@@ -19,7 +19,7 @@ describe('nearby rider dispatch', () => {
       notification: { createMany: jest.fn() },
     };
     const prisma = {
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', latitude: 0, longitude: 0 }) },
+      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id', status: 'APPROVED', latitude: 0, longitude: 0 }) },
       order: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'order-id',
@@ -27,7 +27,7 @@ describe('nearby rider dispatch', () => {
           status: 'PRINTING',
           deliveryFee: 250,
         }),
-        findUnique: jest.fn().mockResolvedValue({ id: 'order-id', status: 'READY_FOR_PICKUP' }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'order-id', status: 'READY_FOR_PICKUP' }),
       },
       $transaction: jest.fn((callback: (tx: typeof transaction) => Promise<number>) => callback(transaction)),
     } as unknown as PrismaService;

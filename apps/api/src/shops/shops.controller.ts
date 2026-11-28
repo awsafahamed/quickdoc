@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { ShopsService } from './shops.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -36,8 +36,13 @@ export class ShopsController {
   }
 
   @Get(':id')
-  get(@Param('id') id: string) {
-    return { data: this.shops.findById(id) };
+  async get(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query('lat') latitude?: string,
+    @Query('lng') longitude?: string,
+  ) {
+    const location = parseLocation(latitude, longitude);
+    return { data: await this.shops.findById(id, location.latitude, location.longitude) };
   }
 }
 
@@ -64,7 +69,7 @@ export class PublicCatalogController {
   }
 
   @Get('documents/:id/preview-url')
-  async previewUrl(@Param('id') id: string) {
+  async previewUrl(@Param('id', new ParseUUIDPipe()) id: string) {
     const document = await this.prisma.shopCatalogDocument.findFirst({
       where: { id, isPublished: true, shop: { status: 'APPROVED' } },
       select: { objectKey: true, name: true },

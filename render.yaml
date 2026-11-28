@@ -12,6 +12,10 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
+      # Encrypts pickup codes and delivery PINs. Never rotate it while orders are in flight:
+      # codes on those orders become unreadable and shops/customers must issue new ones.
+      - key: DATA_ENCRYPTION_KEY
+        generateValue: true
       - key: WEB_ORIGINS
         value: https://customer-web-murex-seven.vercel.app,https://shop-web-gray.vercel.app,https://rider-web-blue.vercel.app,https://agent-web-neon.vercel.app,https://admin-web-omega-nine.vercel.app
       - key: CUSTOMER_WEB_ORIGIN
@@ -26,3 +30,19 @@ services:
         sync: false
       - key: GOOGLE_OAUTH_REDIRECT_URI
         value: https://quickdoc-fwuf.onrender.com/api/v1/auth/oauth/google/callback
+      # Private S3-compatible bucket for customer and catalogue PDFs (required for uploads).
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      # Orders farther than this from the shop (road-adjusted km) are refused.
+      - key: MAX_DELIVERY_DISTANCE_KM
+        value: "50"

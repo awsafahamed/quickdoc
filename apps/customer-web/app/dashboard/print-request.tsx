@@ -21,6 +21,7 @@ type Quote = {
   total: number;
   currency: string;
   sheets: number;
+  deliveryDistanceKm?: number;
   expiresAt: string;
   shopServiceTotal?: number;
   shopServices?: { code: string; name: string; price: number }[];
@@ -63,7 +64,7 @@ export type PrintOrderSummary = {
   shopName: string;
 };
 
-type SavedAddress = { id: string; label: string; line: string };
+type SavedAddress = { id: string; label: string; line: string; latitude?: number | string | null; longitude?: number | string | null };
 
 function Icon({ name }: { name: 'file' | 'upload' | 'print' | 'arrow' | 'chevron' | 'shield' }) {
   const paths = {
@@ -83,8 +84,11 @@ function apiBase(): string {
 
 function requireAccessToken(): string {
   const token = window.sessionStorage.getItem('print-attest-access-token');
-  if (!token) throw new Error('Your sign-in has expired. Sign in again to continue.');
-  return token;
+  // Without an access token the session interceptor renews it from the stored refresh token.
+  if (!token && !window.localStorage.getItem('print-attest-refresh-token')) {
+    throw new Error('Your sign-in has expired. Sign in again to continue.');
+  }
+  return token ?? '';
 }
 
 async function getApiError(response: Response, fallback: string): Promise<Error> {
@@ -175,6 +179,12 @@ export default function PrintRequestFlow({
   const [customAddress, setCustomAddress] = useState('');
   const [instructions, setInstructions] = useState('');
   const [clientKey, setClientKey] = useState('');
+  const selectedSavedAddress = addressMode === 'saved' ? addresses.find((item) => item.id === selectedAddressId) : undefined;
+  const savedAddressLocation = selectedSavedAddress?.latitude != null && selectedSavedAddress.longitude != null
+    ? { latitude: Number(selectedSavedAddress.latitude), longitude: Number(selectedSavedAddress.longitude) }
+    : null;
+  // Delivery is priced from the shop to this point, so an order needs real coordinates.
+  const deliveryLocation = savedAddressLocation ?? customerLocation;
 
   useEffect(() => {
     if (!file) {
@@ -261,6 +271,7 @@ export default function PrintRequestFlow({
         lamination: config.lamination,
         deliverySpeed: config.deliverySpeed,
         deliveryDistanceKm: config.distance,
+        ...(deliveryLocation ? { deliveryLatitude: deliveryLocation.latitude, deliveryLongitude: deliveryLocation.longitude } : {}),
         shopId: selectedShopId,
         shopServiceCodes: selectedShopServiceCodes,
       }),
@@ -293,6 +304,8 @@ export default function PrintRequestFlow({
     config.lamination,
     config.deliverySpeed,
     config.distance,
+    deliveryLocation?.latitude,
+    deliveryLocation?.longitude,
   ]);
 
   const configIsValid = Number.isInteger(config.pages) && config.pages >= 1 && config.pages <= 10000
@@ -316,6 +329,16 @@ export default function PrintRequestFlow({
     setFile(selectedFile);
     setSavedDocument(null);
     setQuote(null);
+    // Upload straight away so pricing uses the page count QuickDoc reads from the PDF itself.
+    setBusy(true);
+    try {
+      await uploadDocument(selectedFile);
+    } catch (cause) {
+      setFile(null);
+      setError(cause instanceof Error ? cause.message : 'The PDF could not be uploaded. Try again.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const requestCustomerLocation = () => {
@@ -418,14 +441,15 @@ export default function PrintRequestFlow({
     }
   };
 
-  const uploadDocument = async (): Promise<SavedDocument> => {
-    if (!file) {
+  const uploadDocument = async (selected: File | null = file): Promise<SavedDocument> => {
+    if (!selected) {
       if (savedDocument) return savedDocument;
       throw new Error('Choose a PDF before continuing.');
     }
-    if (savedDocument && savedDocument.name === file.name && savedDocument.sizeBytes === file.size && savedDocument.pageCount === config.pages) {
+    if (savedDocument && savedDocument.name === selected.name && savedDocument.sizeBytes === selected.size) {
       return savedDocument;
     }
+    const file = selected;
 
     const token = requireAccessToken();
     const api = apiBase();
@@ -452,13 +476,13 @@ export default function PrintRequestFlow({
         name: file.name,
         mimeType: 'application/pdf',
         sizeBytes: file.size,
-        pageCount: config.pages,
         objectKey: upload.data.objectKey,
       }),
     });
     if (!saveResponse.ok) throw await getApiError(saveResponse, 'The uploaded document could not be saved');
     const result = await saveResponse.json() as { data: SavedDocument };
     setSavedDocument(result.data);
+    if (result.data.pageCount) setConfig((current) => ({ ...current, pages: result.data.pageCount ?? current.pages }));
     onDocumentSaved(result.data);
     return result.data;
   };
@@ -488,6 +512,10 @@ export default function PrintRequestFlow({
       setError('Choose an eligible shop and enter a complete delivery address.');
       return;
     }
+    if (!deliveryLocation) {
+      setError('Share your delivery location so the rider can find you and delivery can be priced accurately.');
+      return;
+    }
     if (Date.parse(quote.expiresAt) <= Date.now()) {
       setError('Your quote expired. Return to print options and request a new quote.');
       return;
@@ -509,7 +537,6 @@ export default function PrintRequestFlow({
           colour: config.colour === 'COLOUR',
           duplex: config.sides === 'DUPLEX',
           copies: config.copies,
-          printedSides: config.pages,
           binding: config.binding,
           stapling: config.stapling,
           lamination: config.lamination,
@@ -517,6 +544,8 @@ export default function PrintRequestFlow({
           deliveryDistanceKm: config.distance,
           shopServiceCodes: selectedShopServiceCodes,
           deliveryAddress,
+          deliveryLatitude: deliveryLocation.latitude,
+          deliveryLongitude: deliveryLocation.longitude,
           instructions: instructions.trim() || undefined,
           clientKey: key,
         }),
@@ -607,10 +636,21 @@ export default function PrintRequestFlow({
               else { setAddressMode('saved'); setSelectedAddressId(event.target.value); }
             }}><option value="custom">Enter a different address</option>{addresses.map((address) => <option value={address.id} key={address.id}>{address.label} · {address.line}</option>)}</select></label></div>}
             {(!addresses.length || addressMode === 'custom') && <label className="field-label">Delivery address<textarea rows={3} value={customAddress} onChange={(event) => setCustomAddress(event.target.value)} placeholder="Building, street and area" /></label>}
+            <div className="delivery-location">
+              <strong>Delivery location</strong>
+              {savedAddressLocation
+                ? <span>Using the location saved with this address.</span>
+                : customerLocation
+                  ? <span>Using your current location ({customerLocation.latitude.toFixed(4)}, {customerLocation.longitude.toFixed(4)}).</span>
+                  : <span>Required so the rider can find you and delivery is priced by real distance.</span>}
+              {!savedAddressLocation && <button className="button button--secondary button--small" type="button" disabled={busy} onClick={requestCustomerLocation}>{customerLocation ? 'Update my location' : 'Use my current location'}</button>}
+              {locationMessage && <small role="status">{locationMessage}</small>}
+            </div>
+            {quote && <p className="checkout-note">Delivery distance: {quote.deliveryDistanceKm ?? config.distance} km from the shop.</p>}
             <label className="field-label">Delivery instructions <span className="field-label__optional">Optional</span><textarea rows={3} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="Gate code, landmarks or other helpful details" /></label>
             {error && <p className="flow-error" role="alert">{error}</p>}
-            <div className="form-actions"><button className="button button--primary" type="button" disabled={busy || !selectedShop} onClick={placeOrder}>{busy ? 'Placing request…' : 'Place print request'} <Icon name="arrow" /></button><button className="button button--quiet" type="button" onClick={onBack}>Return to dashboard</button></div>
-            <p className="checkout-note">No payment is taken here. The selected shop must accept the request before production begins.</p>
+            <div className="form-actions"><button className="button button--primary" type="button" disabled={busy || !selectedShop || !deliveryLocation} onClick={placeOrder}>{busy ? 'Placing request…' : 'Place print request'} <Icon name="arrow" /></button><button className="button button--quiet" type="button" onClick={onBack}>Return to dashboard</button></div>
+            <p className="checkout-note">Pay the rider in cash on delivery. Nothing is charged now, and you can cancel until the shop starts printing. You will see a delivery PIN in My orders; give it to the rider only when you receive your documents.</p>
           </div>
           <aside className="shop-summary panel">
             <p className="section-label">Order review</p><h2>{quote?.currency} {quote?.total.toFixed(2)}</h2>
@@ -658,7 +698,7 @@ export default function PrintRequestFlow({
           {error && <p className="flow-error" role="alert">{error}</p>}
           <div className="form-divider" />
           <div className="print-options">
-            <label className="field-label">Pages in PDF<input type="number" min="1" max="10000" step="1" disabled={busy || quoteState === 'loading'} value={config.pages} onChange={(event) => updateConfig('pages', Number(event.target.value))} /></label>
+            <label className="field-label">Pages in PDF<input type="number" min="1" max="10000" step="1" readOnly={Boolean(savedDocument?.pageCount)} disabled={busy || quoteState === 'loading' || !savedDocument} value={savedDocument?.pageCount ?? config.pages} onChange={(event) => updateConfig('pages', Number(event.target.value))} aria-describedby="page-count-help" /><small id="page-count-help">{savedDocument?.pageCount ? 'Counted from your PDF' : busy ? 'Counting pages…' : 'Counted after upload'}</small></label>
             <label className="field-label">Copies<input type="number" min="1" max="100" step="1" disabled={busy || quoteState === 'loading'} value={config.copies} onChange={(event) => updateConfig('copies', Number(event.target.value))} /></label>
             <label className="field-label">Paper size<select disabled={busy || quoteState === 'loading'} value={config.paperSize} onChange={(event) => updateConfig('paperSize', event.target.value)}><option value="A4">A4</option><option value="A3">A3</option><option value="A5">A5</option></select></label>
             <label className="field-label">Colour<select disabled={busy || quoteState === 'loading'} value={config.colour} onChange={(event) => updateConfig('colour', event.target.value)}><option value="BLACK_WHITE">Black & white</option><option value="COLOUR">Colour</option></select></label>

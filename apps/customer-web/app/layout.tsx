@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './styles.css';
+import { SessionRefresh } from './session-refresh';
 
 export const metadata: Metadata = {
   title: 'QuickDoc | Print and Document Services',
@@ -9,7 +10,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body><SessionRefresh access="print-attest-access-token" refresh="print-attest-refresh-token" signInPath="/login" />{children}</body>
     </html>
   );
 }

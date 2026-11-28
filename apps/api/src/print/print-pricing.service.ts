@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { deliveryDistanceKm } from '../common/geo';
 import { PrintQuoteBreakdown, PrintQuoteRequest } from './print.types';
 
 const DEFAULT_PRICING = {
@@ -38,12 +39,19 @@ export class PrintPricingService {
 
     let shopServices: { code: string; name: string; price: number }[] = [];
     let shopPricePerSide: number | undefined;
+    let distanceKm = request.deliveryDistanceKm;
     if (request.shopId) {
       const shop = await this.prisma.shop.findFirst({
         where: { id: request.shopId, status: 'APPROVED', isOpen: true },
-        select: { id: true },
+        select: { id: true, latitude: true, longitude: true },
       });
       if (!shop) throw new BadRequestException('Shop is not eligible');
+      if (request.deliveryLatitude !== undefined && request.deliveryLongitude !== undefined) {
+        distanceKm = deliveryDistanceKm(shop, {
+          latitude: request.deliveryLatitude,
+          longitude: request.deliveryLongitude,
+        });
+      }
 
       const shopPrice = await this.prisma.shopPrice.findFirst({
         where: {
@@ -95,9 +103,9 @@ export class PrintPricingService {
     const finishing = (request.binding ? pricing.BINDING_FEE : 0)
       + (request.stapling ? pricing.STAPLING_FEE : 0)
       + (request.lamination ? pricing.LAMINATION_PER_PAGE * printedPages : 0);
-    const delivery = pricing.DELIVERY_BASE + request.deliveryDistanceKm * pricing.DELIVERY_PER_KM;
+    const delivery = pricing.DELIVERY_BASE + distanceKm * pricing.DELIVERY_PER_KM;
     const express = request.deliverySpeed === 'EXPRESS'
-      ? pricing.EXPRESS_BASE + request.deliveryDistanceKm * pricing.EXPRESS_PER_KM
+      ? pricing.EXPRESS_BASE + distanceKm * pricing.EXPRESS_PER_KM
       : 0;
     const shopService = pricing.SHOP_SERVICE_FEE;
     const shopServiceTotal = shopServices.reduce((total, service) => total + service.price, 0);
@@ -122,6 +130,7 @@ export class PrintPricingService {
       quoteId: randomUUID(),
       expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
       sheets,
+      deliveryDistanceKm: distanceKm,
     };
   }
 }

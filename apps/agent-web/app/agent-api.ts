@@ -147,6 +147,29 @@ async function send(
   }
 }
 
+let refreshInFlight: Promise<AgentSession | null> | null = null;
+
+/** One refresh at a time: parallel 401s share it, and a token rotated by another tab is reused. */
+function refreshSession(usedRefreshToken: string): Promise<AgentSession | null> {
+  refreshInFlight ??= (async () => {
+    const attempt = (refreshToken: string) => send('/auth/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    let response = await attempt(usedRefreshToken);
+    if (!response.ok) {
+      const latest = readSession()?.refreshToken;
+      if (latest && latest !== usedRefreshToken) response = await attempt(latest);
+    }
+    if (!response.ok) return null;
+    const refreshed = await parseResponse<AgentSession>(response);
+    saveSession(refreshed);
+    return refreshed;
+  })().finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
+}
+
 export async function apiRequest<T>(
   path: string,
   options: { method?: string; body?: unknown } = {},
@@ -159,17 +182,11 @@ export async function apiRequest<T>(
   let response = await send(path, init, session?.accessToken);
 
   if (response.status === 401 && session?.refreshToken && path !== '/auth/refresh') {
-    const refreshedResponse = await send('/auth/refresh', {
-      method: 'POST',
-      body: JSON.stringify({ refreshToken: session.refreshToken }),
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!refreshedResponse.ok) {
+    const refreshed = await refreshSession(session.refreshToken);
+    if (!refreshed) {
       clearSession();
       throw new Error('Your session expired. Sign in again to continue.');
     }
-    const refreshed = await parseResponse<AgentSession>(refreshedResponse);
-    saveSession(refreshed);
     const retryBody = path === '/auth/logout' && typeof options.body === 'object' && options.body !== null
       ? JSON.stringify({ ...options.body, refreshToken: refreshed.refreshToken })
       : init.body;

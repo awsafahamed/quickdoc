@@ -29,7 +29,40 @@ type Order = {
   tone: 'blue' | 'green';
   date: string;
   payment?: { status: string; method: string; amount: number | string; currency: string } | null;
+  deliveryPin?: string | null;
+  handoverLocked?: boolean;
+  reviewed?: boolean;
 };
+
+const PRINT_CANCELLABLE = ['PENDING_ACCEPTANCE', 'ACCEPTED'];
+const PIN_STAGES = ['READY_FOR_PICKUP', 'RIDER_ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY'];
+const statusText: Record<string, string> = {
+  PENDING_ACCEPTANCE: 'Waiting for shop',
+  ACCEPTED: 'Accepted',
+  REJECTED: 'Declined by shop',
+  PRINTING: 'Printing',
+  READY_FOR_PICKUP: 'Ready for rider',
+  RIDER_ASSIGNED: 'Rider assigned',
+  PICKED_UP: 'Picked up',
+  OUT_FOR_DELIVERY: 'Out for delivery',
+  DELIVERED: 'Delivered',
+  COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
+  DELIVERY_FAILED: 'Delivery failed',
+  PICKUP_SCHEDULED: 'Pickup scheduled',
+  AGENT_RECEIVED: 'With agent',
+  PROCESSING: 'Processing',
+  ATTESTED: 'Attested',
+  RETURN_READY: 'Ready for return',
+};
+
+export type OrderActions = {
+  onConfirmDelivery: (order: Order) => void;
+  onCancel: (order: Order) => void;
+  onNewPin: (order: Order) => void;
+  onReview: (order: Order, shopRating: number, comment: string) => Promise<void>;
+};
+type SavedAddressRow = { id: string; label: string; line: string; latitude?: number | string | null; longitude?: number | string | null };
 type CustomerNotification = { id: string; title: string; text: string; time: string; unread: boolean };
 
 function Icon({ name }: { name: IconName }) {
@@ -63,13 +96,37 @@ function ServiceCard({ type, title, description, action }: { type: 'print' | 'at
   );
 }
 
-function OrderRow({ order, onConfirmDelivery }: { order: Order; onConfirmDelivery?: (order: Order) => void }) {
+function OrderRow({ order, actions }: { order: Order; actions?: OrderActions }) {
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState('');
+  const [reviewing, setReviewing] = useState(false);
+  const isPrint = order.type === 'Print & Deliver';
+  const cancellable = order.backendId && (isPrint ? PRINT_CANCELLABLE.includes(order.status) : order.status === 'PICKUP_SCHEDULED');
+  const showPin = isPrint && PIN_STAGES.includes(order.status);
   return (
     <div className="order-row">
-      <div className="order-row__mark"><Icon name={order.type === 'Print & Deliver' ? 'print' : 'shield'} /></div>
-      <div className="order-row__details"><strong>{order.type}</strong><span>{order.id} · {order.detail}</span></div>
-      <div className="order-row__status"><span className={`status-dot status-dot--${order.tone}`} />{order.status}<small>{order.date}</small></div>
-      {order.status === 'DELIVERED' && order.backendId && onConfirmDelivery && <button className="button button--secondary button--small" type="button" onClick={() => onConfirmDelivery(order)}>Confirm delivery</button>}
+      <div className="order-row__mark"><Icon name={isPrint ? 'print' : 'shield'} /></div>
+      <div className="order-row__details">
+        <strong>{order.type}</strong><span>{order.id} · {order.detail}</span>
+        {order.payment && <small>{order.payment.method === 'CASH_ON_DELIVERY' ? 'Cash on delivery' : 'Online'} · {order.payment.currency} {Number(order.payment.amount).toFixed(2)} · {order.payment.status.toLowerCase()}</small>}
+        {showPin && (order.deliveryPin
+          ? <span className="delivery-pin" aria-live="polite">Delivery PIN <strong>{order.deliveryPin}</strong><small>Give this to the rider only when you receive your documents.</small></span>
+          : <small>No delivery PIN is available for this order. Issue one before the rider arrives.</small>)}
+        {order.handoverLocked && <small className="quote-error">Too many incorrect PIN attempts. Issue a new PIN to continue.</small>}
+      </div>
+      <div className="order-row__status"><span className={`status-dot status-dot--${order.tone}`} />{statusText[order.status] ?? order.status.replaceAll('_', ' ').toLowerCase()}<small>{order.date}</small></div>
+      <div className="order-row__actions">
+        {order.status === 'DELIVERED' && order.backendId && actions && <button className="button button--secondary button--small" type="button" onClick={() => actions.onConfirmDelivery(order)}>Confirm delivery</button>}
+        {showPin && actions && <button className="button button--quiet button--small" type="button" onClick={() => actions.onNewPin(order)}>{order.deliveryPin ? 'New PIN' : 'Issue PIN'}</button>}
+        {cancellable && actions && <button className="button button--quiet button--small" type="button" onClick={() => { if (window.confirm(`Cancel ${order.id}? This cannot be undone.`)) actions.onCancel(order); }}>Cancel</button>}
+        {isPrint && order.status === 'COMPLETED' && !order.reviewed && actions && (reviewing
+          ? <form className="review-form" onSubmit={(event) => { event.preventDefault(); if (rating) void actions.onReview(order, rating, comment).then(() => setReviewing(false)); }}>
+              <span role="radiogroup" aria-label="Rate the shop">{[1, 2, 3, 4, 5].map((value) => <button key={value} type="button" role="radio" aria-checked={rating === value} aria-label={`${value} star${value === 1 ? '' : 's'}`} className={value <= rating ? 'star star--on' : 'star'} onClick={() => setRating(value)}>★</button>)}</span>
+              <input value={comment} maxLength={1000} onChange={(event) => setComment(event.target.value)} placeholder="Optional comment" aria-label="Review comment" />
+              <button className="button button--secondary button--small" type="submit" disabled={!rating}>Send</button>
+            </form>
+          : <button className="button button--quiet button--small" type="button" onClick={() => setReviewing(true)}>Rate order</button>)}
+      </div>
     </div>
   );
 }
@@ -97,7 +154,7 @@ export default function CustomerDashboardPage() {
   const [orderError, setOrderError] = useState('');
   const [customerOrders, setCustomerOrders] = useState<Order[]>([]);
   const [documents, setDocuments] = useState<{ id: string; name: string; sizeBytes: number; pageCount: number | null; createdAt: string }[]>([]);
-  const [addresses, setAddresses] = useState<{ id: string; label: string; line: string }[]>([]);
+  const [addresses, setAddresses] = useState<SavedAddressRow[]>([]);
   const [supportOrders, setSupportOrders] = useState<{ id: string; reference: string }[]>([]);
 
   useEffect(() => {
@@ -115,8 +172,9 @@ export default function CustomerDashboardPage() {
       })
       .catch(() => setApiState('unavailable'));
     const accessToken = window.sessionStorage.getItem('print-attest-access-token');
-    if (accessToken) {
-      const authHeaders = { Authorization: `Bearer ${accessToken}` };
+    // A new tab has no access token yet; the session interceptor renews it from the refresh token.
+    if (accessToken || window.localStorage.getItem('print-attest-refresh-token')) {
+      const authHeaders = { Authorization: `Bearer ${accessToken ?? ''}` };
       fetch(`${apiUrl}/customer/me`, { headers: authHeaders })
         .then((response) => response.ok ? response.json() as Promise<{ data: { name: string; email: string; CustomerProfile?: { phone?: string } | null } }> : Promise.reject())
         .then((result) => {
@@ -131,10 +189,10 @@ export default function CustomerDashboardPage() {
         })
         .catch(() => undefined);
       fetch(`${apiUrl}/customer/orders`, { headers: authHeaders })
-        .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; createdAt: string; currency: string; Payment: { status: string; method: string; amount: number | string } | null; Shop: { name: string } }[] }> : Promise.reject())
+        .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; createdAt: string; currency: string; deliveryPin?: string | null; handoverLocked?: boolean; Review?: unknown; Payment: { status: string; method: string; amount: number | string } | null; Shop: { name: string } }[] }> : Promise.reject())
         .then((result) => {
           setCustomerOrders((items) => [
-            ...result.data.map((order) => ({ id: order.reference, backendId: order.id, type: 'Print & Deliver', detail: order.Shop?.name ?? 'Printing shop', status: order.status, tone: 'blue' as const, date: new Date(order.createdAt).toLocaleDateString(), payment: order.Payment ? { ...order.Payment, currency: order.currency } : null })),
+            ...result.data.map((order) => ({ id: order.reference, backendId: order.id, type: 'Print & Deliver', detail: order.Shop?.name ?? 'Printing shop', status: order.status, tone: 'blue' as const, date: new Date(order.createdAt).toLocaleDateString(), payment: order.Payment ? { ...order.Payment, currency: order.currency } : null, deliveryPin: order.deliveryPin ?? null, handoverLocked: order.handoverLocked ?? false, reviewed: Boolean(order.Review) })),
             ...items.filter((order) => order.type === 'Attest & Return'),
           ]);
           setSupportOrders(result.data.map(({ id, reference }) => ({ id, reference })));
@@ -147,6 +205,7 @@ export default function CustomerDashboardPage() {
             ...items.filter((order) => order.type === 'Print & Deliver'),
             ...result.data.map((job) => ({
               id: job.reference,
+              backendId: job.id,
               type: 'Attest & Return',
               detail: [job.serviceCode, job.agent?.businessName].filter(Boolean).join(' · '),
               status: job.status,
@@ -223,6 +282,54 @@ export default function CustomerDashboardPage() {
     }
   };
 
+  const orderRequest = async (path: string, body?: unknown) => {
+    const accessToken = window.sessionStorage.getItem('print-attest-access-token');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+    const response = await fetch(`${apiUrl}${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken ?? ''}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const result = await response.json().catch(() => null) as { data?: Record<string, unknown>; message?: string | string[] } | null;
+    if (!response.ok) {
+      throw new Error((Array.isArray(result?.message) ? result?.message.join(', ') : result?.message) ?? 'The request could not be completed. Refresh and try again.');
+    }
+    return result?.data ?? {};
+  };
+
+  const runOrderAction = async (action: () => Promise<void>) => {
+    setOrderError('');
+    setOrderNotice('');
+    try { await action(); } catch (caught) {
+      setOrderError(caught instanceof Error ? caught.message : 'The request could not be completed.');
+    }
+  };
+
+  const orderActions: OrderActions = {
+    onConfirmDelivery: (order) => void confirmDelivery(order),
+    onCancel: (order) => void runOrderAction(async () => {
+      if (!order.backendId) return;
+      await orderRequest(order.type === 'Print & Deliver'
+        ? `/customer/orders/${encodeURIComponent(order.backendId)}/cancel`
+        : `/attestation/me/jobs/${encodeURIComponent(order.backendId)}/cancel`, order.type === 'Print & Deliver' ? {} : undefined);
+      setCustomerOrders((items) => items.map((item) => item.backendId === order.backendId ? { ...item, status: 'CANCELLED', deliveryPin: null } : item));
+      setOrderNotice(`${order.id} was cancelled.`);
+    }),
+    onNewPin: (order) => void runOrderAction(async () => {
+      if (!order.backendId) return;
+      const result = await orderRequest(`/customer/orders/${encodeURIComponent(order.backendId)}/delivery-pin`);
+      const deliveryPin = typeof result.deliveryPin === 'string' ? result.deliveryPin : null;
+      setCustomerOrders((items) => items.map((item) => item.backendId === order.backendId ? { ...item, deliveryPin, handoverLocked: false } : item));
+      setOrderNotice(`A new delivery PIN was issued for ${order.id}. The previous PIN no longer works.`);
+    }),
+    onReview: (order, shopRating, comment) => runOrderAction(async () => {
+      if (!order.backendId) return;
+      await orderRequest(`/customer/orders/${encodeURIComponent(order.backendId)}/review`, { shopRating, comment: comment.trim() || undefined });
+      setCustomerOrders((items) => items.map((item) => item.backendId === order.backendId ? { ...item, reviewed: true } : item));
+      setOrderNotice(`Thanks for rating ${order.id}.`);
+    }),
+  };
+
   const markAllNotificationsRead = async () => {
     const accessToken = window.sessionStorage.getItem('print-attest-access-token');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
@@ -270,7 +377,7 @@ export default function CustomerDashboardPage() {
         <main className="content">
           {orderError && <p className="flow-error" role="alert">{orderError}</p>}
           {orderNotice && <p className="profile-saved" role="status">{orderNotice}</p>}
-          {view === 'dashboard' && <Dashboard goTo={goTo} apiState={apiState} customerOrders={customerOrders} customerName={customerName.split(/\s+/)[0]} onConfirmDelivery={confirmDelivery} />}
+          {view === 'dashboard' && <Dashboard goTo={goTo} apiState={apiState} customerOrders={customerOrders} customerName={customerName.split(/\s+/)[0]} actions={orderActions} />}
           {view === 'print' && <PrintRequestFlow
             addresses={addresses}
             onDocumentSaved={(document: SavedDocument) => setDocuments((items) => [document, ...items.filter((item) => item.id !== document.id)])}
@@ -290,12 +397,23 @@ export default function CustomerDashboardPage() {
             onViewOrders={() => goTo('orders')}
             onBack={() => goTo('dashboard')}
           />}
-          {view === 'orders' && <SimplePage title="My orders" description="Every request, handover and delivery in one place.">{customerOrders.length ? <div className="panel">{customerOrders.map((order) => <OrderRow key={order.id} order={order} onConfirmDelivery={confirmDelivery} />)}</div> : <EmptyState title="No orders yet" text="Your active and completed requests will appear here." action="Start a request" onAction={() => goTo('print')} />}</SimplePage>}
+          {view === 'orders' && <SimplePage title="My orders" description="Every request, handover and delivery in one place.">{customerOrders.length ? <div className="panel">{customerOrders.map((order) => <OrderRow key={order.id} order={order} actions={orderActions} />)}</div> : <EmptyState title="No orders yet" text="Your active and completed requests will appear here." action="Start a request" onAction={() => goTo('print')} />}</SimplePage>}
           {view === 'documents' && <DocumentLibrary documents={documents} onChanged={setDocuments} onStartPrint={() => goTo('print')} />}
           {view === 'addresses' && <AddressPage addresses={addresses} onChanged={setAddresses} />}
           {view === 'payments' && <PaymentsPage orders={customerOrders.filter((order) => order.type === 'Print & Deliver')} />}
           {view === 'support' && <CustomerSupportPage orders={supportOrders} />}
-          {view === 'profile' && <ProfilePage session={session} onSave={saveProfile} onLogout={() => { window.localStorage.removeItem('print-attest-session'); window.location.href = '/login'; }} />}
+          {view === 'profile' && <ProfilePage session={session} onSave={saveProfile} onLogout={() => {
+            const refreshToken = window.localStorage.getItem('print-attest-refresh-token');
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+            const done = () => {
+              window.localStorage.removeItem('print-attest-session');
+              window.localStorage.removeItem('print-attest-refresh-token');
+              window.sessionStorage.removeItem('print-attest-access-token');
+              window.location.href = '/login';
+            };
+            if (!refreshToken) return done();
+            void fetch(`${apiUrl}/auth/logout`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken }) }).finally(done);
+          }} />}
           {view !== 'dashboard' && view !== 'print' && view !== 'attest' && view !== 'orders' && view !== 'documents' && view !== 'addresses' && view !== 'payments' && view !== 'support' && view !== 'profile' && <SimplePage title={currentLabel} description="This workspace is ready for your account details."><div className="empty-panel"><span className="empty-panel__icon"><Icon name={navigation.find((item) => item.id === view)?.icon ?? 'user'} /></span><h3>Nothing to show yet</h3><p>Connect your customer account to manage this area securely.</p><button className="button button--secondary" type="button" onClick={() => goTo('support')}>Contact support <Icon name="arrow" /></button></div></SimplePage>}
         </main>
       </div>
@@ -303,7 +421,7 @@ export default function CustomerDashboardPage() {
   );
 }
 
-function Dashboard({ goTo, apiState, customerOrders, customerName, onConfirmDelivery }: { goTo: (view: View) => void; apiState: 'loading' | 'connected' | 'unavailable'; customerOrders: Order[]; customerName: string; onConfirmDelivery: (order: Order) => void }) {
+function Dashboard({ goTo, apiState, customerOrders, customerName, actions }: { goTo: (view: View) => void; apiState: 'loading' | 'connected' | 'unavailable'; customerOrders: Order[]; customerName: string; actions: OrderActions }) {
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   useEffect(() => setCurrentTime(new Date()), []);
   const currentHour = currentTime?.getHours();
@@ -315,7 +433,7 @@ function Dashboard({ goTo, apiState, customerOrders, customerName, onConfirmDeli
       {apiState === 'unavailable' && <div className="system-notice"><span className="system-notice__dot" /><div><strong>Workspace connection is unavailable</strong><p>Live orders and account data will appear when the API is running. Your document files are not sent anywhere from this screen.</p></div></div>}
       {apiState === 'connected' && <div className="system-notice system-notice--success"><span className="system-notice__dot" /><div><strong>Workspace connected</strong><p>Live account data is ready to load from the customer API.</p></div></div>}
       <section className="services"><div className="section-heading"><div><p className="section-label">Services</p><h2>Make progress in a few steps.</h2></div><span className="section-note">Secure by design</span></div><div className="service-grid"><ServiceCard type="print" title="Print & Deliver" description="Upload your files, choose your finish and get them delivered from a nearby print shop." action={() => goTo('print')} /><ServiceCard type="attest" title="Attest & Return" description="Send originals through a verified process and track them safely back to your door." action={() => goTo('attest')} /></div></section>
-      <section className="orders-section"><div className="section-heading"><div><p className="section-label">In progress</p><h2>Keep an eye on your orders.</h2></div><button className="text-button text-button--muted" type="button" onClick={() => goTo('orders')}>View all <Icon name="arrow" /></button></div>{customerOrders.length ? <div className="panel">{customerOrders.map((order) => <OrderRow key={order.id} order={order} onConfirmDelivery={onConfirmDelivery} />)}</div> : <div className="panel empty-orders"><span className="empty-orders__icon"><Icon name="orders" /></span><span><strong>No active orders</strong><small>Start a request when you are ready.</small></span><button className="text-button" type="button" onClick={() => goTo('print')}>Get started <Icon name="arrow" /></button></div>}</section>
+      <section className="orders-section"><div className="section-heading"><div><p className="section-label">In progress</p><h2>Keep an eye on your orders.</h2></div><button className="text-button text-button--muted" type="button" onClick={() => goTo('orders')}>View all <Icon name="arrow" /></button></div>{customerOrders.length ? <div className="panel">{customerOrders.slice(0, 5).map((order) => <OrderRow key={order.id} order={order} actions={actions} />)}</div> : <div className="panel empty-orders"><span className="empty-orders__icon"><Icon name="orders" /></span><span><strong>No active orders</strong><small>Start a request when you are ready.</small></span><button className="text-button" type="button" onClick={() => goTo('print')}>Get started <Icon name="arrow" /></button></div>}</section>
     </>
   );
 }
@@ -428,21 +546,33 @@ function EmptyState({ title, text, action, onAction }: { title: string; text: st
   return <div className="empty-panel"><span className="empty-panel__icon"><Icon name="orders" /></span><h3>{title}</h3><p>{text}</p><button className="button button--primary" type="button" onClick={onAction}>{action} <Icon name="arrow" /></button></div>;
 }
 
-function AddressPage({ addresses, onChanged }: { addresses: { id: string; label: string; line: string }[]; onChanged: (addresses: { id: string; label: string; line: string }[]) => void }) {
+function AddressPage({ addresses, onChanged }: { addresses: SavedAddressRow[]; onChanged: (addresses: SavedAddressRow[]) => void }) {
   const [label, setLabel] = useState('');
   const [line, setLine] = useState('');
   const [error, setError] = useState('');
+  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const captureLocation = () => {
+    if (!navigator.geolocation) { setError('Location is not available in this browser.'); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => { setLocation({ latitude: Number(coords.latitude.toFixed(7)), longitude: Number(coords.longitude.toFixed(7)) }); setLocating(false); setError(''); },
+      () => { setLocating(false); setError('Location access was not available. You can still save the address and share your location at checkout.'); },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  };
   const addAddress = async () => {
     if (!label.trim() || line.trim().length < 5) { setError('Enter a label and complete address.'); return; }
     const accessToken = window.sessionStorage.getItem('print-attest-access-token');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
     try {
-      const response = await fetch(`${apiUrl}/customer/addresses`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken ?? ''}` }, body: JSON.stringify({ label: label.trim(), line: line.trim() }) });
+      const response = await fetch(`${apiUrl}/customer/addresses`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken ?? ''}` }, body: JSON.stringify({ label: label.trim(), line: line.trim(), ...(location ?? {}) }) });
       if (!response.ok) throw new Error('Address could not be saved');
-      const result = await response.json() as { data: { id: string; label: string; line: string } };
+      const result = await response.json() as { data: SavedAddressRow };
       onChanged([result.data, ...addresses]);
       setLabel('');
       setLine('');
+      setLocation(null);
       setError('');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Address could not be saved');
@@ -454,7 +584,7 @@ function AddressPage({ addresses, onChanged }: { addresses: { id: string; label:
     const response = await fetch(`${apiUrl}/customer/addresses/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken ?? ''}` } });
     if (response.ok) onChanged(addresses.filter((address) => address.id !== id));
   };
-  return <section className="simple-page"><p className="section-label">Workspace</p><h1>Addresses</h1><p className="simple-page__description">Manage pickup and delivery locations.</p><div className="address-layout"><div className="panel address-form"><h2>Add a new address</h2><label className="field-label">Label<input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Home or office" /></label><label className="field-label">Address<input value={line} onChange={(event) => setLine(event.target.value)} placeholder="Street, building and city" /></label>{error && <p className="quote-error">{error}</p>}<button className="button button--primary" type="button" onClick={addAddress}>Save address</button></div><div className="address-list">{addresses.length ? addresses.map((address) => <div className="address-row" key={address.id}><span className="address-icon"><Icon name="pin" /></span><span><strong>{address.label}</strong><small>{address.line}</small></span><button type="button" aria-label={`Delete ${address.label}`} onClick={() => deleteAddress(address.id)}>×</button></div>) : <div className="empty-panel"><h3>No saved addresses</h3><p>Add an address for faster checkout.</p></div>}</div></div></section>;
+  return <section className="simple-page"><p className="section-label">Workspace</p><h1>Addresses</h1><p className="simple-page__description">Manage pickup and delivery locations.</p><div className="address-layout"><div className="panel address-form"><h2>Add a new address</h2><label className="field-label">Label<input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Home or office" /></label><label className="field-label">Address<input value={line} onChange={(event) => setLine(event.target.value)} placeholder="Street, building and city" /></label><div className="delivery-location"><strong>Pin this address</strong><span>{location ? `Location saved (${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}). Stand at this address when capturing it.` : 'Optional. Lets you check out without sharing your location each time.'}</span><button className="button button--secondary button--small" type="button" disabled={locating} onClick={captureLocation}>{locating ? 'Locating…' : location ? 'Capture again' : 'Use my current location'}</button></div>{error && <p className="quote-error">{error}</p>}<button className="button button--primary" type="button" onClick={addAddress}>Save address</button></div><div className="address-list">{addresses.length ? addresses.map((address) => <div className="address-row" key={address.id}><span className="address-icon"><Icon name="pin" /></span><span><strong>{address.label}</strong><small>{address.line}{address.latitude != null ? ' · location pinned' : ''}</small></span><button type="button" aria-label={`Delete ${address.label}`} onClick={() => deleteAddress(address.id)}>×</button></div>) : <div className="empty-panel"><h3>No saved addresses</h3><p>Add an address for faster checkout.</p></div>}</div></div></section>;
 }
 
 function DocumentLibrary({ documents, onChanged, onStartPrint }: { documents: SavedDocument[]; onChanged: (documents: SavedDocument[]) => void; onStartPrint: () => void }) {

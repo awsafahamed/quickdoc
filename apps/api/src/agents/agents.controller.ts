@@ -32,6 +32,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { randomUUID } from 'node:crypto';
+import { notifyUsers } from '../orders/order-lifecycle';
 import { PrismaService } from '../prisma/prisma.service';
 
 class AgentProfileDto {
@@ -81,8 +82,8 @@ class AgentServiceDto {
 }
 
 class CustodyDto {
-  @IsIn(['RECEIVED', 'PROCESSING', 'ATTESTED', 'RETURN_READY'])
-  eventType!: 'RECEIVED' | 'PROCESSING' | 'ATTESTED' | 'RETURN_READY';
+  @IsIn(['RECEIVED', 'PROCESSING', 'ATTESTED', 'RETURN_READY', 'RETURNED'])
+  eventType!: 'RECEIVED' | 'PROCESSING' | 'ATTESTED' | 'RETURN_READY' | 'RETURNED';
 
   @IsOptional()
   @IsString()
@@ -111,7 +112,16 @@ const nextStatus = {
   PROCESSING: { from: ['AGENT_RECEIVED'], to: 'PROCESSING' },
   ATTESTED: { from: ['PROCESSING'], to: 'ATTESTED' },
   RETURN_READY: { from: ['ATTESTED'], to: 'RETURN_READY' },
+  RETURNED: { from: ['RETURN_READY'], to: 'COMPLETED' },
 } as const;
+
+const customerCustodyMessages: Record<keyof typeof nextStatus, (reference: string) => { title: string; body: string }> = {
+  RECEIVED: (reference) => ({ title: 'Documents received', body: `Your agent received the original documents for ${reference}.` }),
+  PROCESSING: (reference) => ({ title: 'Attestation in progress', body: `Your agent started processing ${reference}.` }),
+  ATTESTED: (reference) => ({ title: 'Documents attested', body: `The attestation for ${reference} is complete.` }),
+  RETURN_READY: (reference) => ({ title: 'Ready for return', body: `Your documents for ${reference} are ready to be returned to you.` }),
+  RETURNED: (reference) => ({ title: 'Documents returned', body: `Your original documents for ${reference} were returned. This booking is complete.` }),
+};
 
 @Controller('agents')
 @UseGuards(AuthGuard('jwt'))
@@ -243,13 +253,36 @@ export class AgentsController {
     }
 
     const event = await this.prisma.$transaction(async (transaction) => {
+      const completing = transition.to === 'COMPLETED';
       const updated = await transaction.attestationJob.updateMany({
         where: { id: job.id, agentId: profile.id, status: job.status },
-        data: { status: transition.to },
+        data: { status: transition.to, ...(completing ? { completedAt: new Date() } : {}) },
       });
       if (updated.count !== 1) {
         throw new ConflictException('This job changed; refresh and try again');
       }
+      if (completing) {
+        // The agent is paid their own service fee; delivery and tax stay with the platform.
+        const snapshot = (job.pricingSnapshot ?? {}) as { serviceFee?: number };
+        const amount = Math.round(Number(snapshot.serviceFee ?? 0) * 100) / 100;
+        if (amount > 0) {
+          await transaction.settlement.createMany({
+            data: [{
+              id: randomUUID(),
+              agentId: profile.id,
+              attestationJobId: job.id,
+              kind: 'PAYOUT',
+              amount,
+              idempotencyKey: `attestation:${job.id}:agent-payout`,
+              note: `Attestation fee for ${job.reference}`,
+              updatedAt: new Date(),
+            }],
+            skipDuplicates: true,
+          });
+        }
+      }
+      const message = customerCustodyMessages[dto.eventType](job.reference);
+      await notifyUsers(transaction, [job.customerId], message.title, message.body);
       return transaction.custodyEvent.create({
         data: {
           id: randomUUID(),

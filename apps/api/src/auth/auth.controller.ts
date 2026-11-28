@@ -1,9 +1,12 @@
 import { Body, Controller, Get, Logger, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { GoogleExchangeDto, LoginDto, OtpRequestDto, OtpVerifyDto, RefreshDto, RegisterDto, ResetPasswordDto, ResetRequestDto, ShopOwnerRegisterDto } from './auth.dto';
 
+// Credential endpoints are attractive brute-force targets; keep their per-IP budget small.
+@Throttle({ default: { limit: 20, ttl: 60_000 } })
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
@@ -11,26 +14,31 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post('register')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async register(@Body() dto: RegisterDto) {
     return { data: await this.auth.register(dto) };
   }
 
   @Post('register/shop-owner')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async registerShopOwner(@Body() dto: ShopOwnerRegisterDto) {
     return { data: await this.auth.registerShopOwner(dto) };
   }
 
   @Post('register/rider')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async registerRider(@Body() dto: RegisterDto) {
     return { data: await this.auth.register(dto, 'RIDER') };
   }
 
   @Post('register/agent')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async registerAgent(@Body() dto: RegisterDto) {
     return { data: await this.auth.register(dto, 'AGENT') };
   }
 
   @Post('login')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async login(@Body() dto: LoginDto) {
     return { data: await this.auth.login(dto) };
   }
@@ -56,16 +64,19 @@ export class AuthController {
   }
 
   @Post('password/reset-request')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
   async resetRequest(@Body() dto: ResetRequestDto) {
     return { data: await this.auth.resetRequest(dto) };
   }
 
   @Post('password/reset')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return { data: await this.auth.resetPassword(dto) };
   }
 
   @Get('session')
+  @Throttle({ default: { limit: 240, ttl: 60_000 } })
   @UseGuards(AuthGuard('jwt'))
   session(@Req() request: { user: unknown }) {
     return { data: request.user };

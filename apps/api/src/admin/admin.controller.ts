@@ -32,6 +32,7 @@ import {
   Length,
 } from 'class-validator';
 import { randomUUID } from 'node:crypto';
+import { applyAdminStatusSideEffects, notifyCustomerOfStatus, notifyUsers } from '../orders/order-lifecycle';
 import { PrismaService } from '../prisma/prisma.service';
 
 const approvalStatuses = ['APPROVED', 'REJECTED', 'SUSPENDED'] as const;
@@ -114,6 +115,13 @@ class OrderStatusDto {
   @MinLength(3)
   @MaxLength(500)
   reason!: string;
+}
+
+class SettlementPayoutDto {
+  @IsString()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @Length(3, 120)
+  reference!: string;
 }
 
 class AgentStatusDto {
@@ -575,8 +583,10 @@ export class AdminController {
         const order = await transaction.order.update({
           where: { id },
           data: { status: body.status },
-          select: { id: true, reference: true, status: true },
+          select: { id: true, reference: true, status: true, customerId: true },
         });
+        await applyAdminStatusSideEffects(transaction, id, body.status);
+        await notifyCustomerOfStatus(transaction, order, body.status, reason);
         await transaction.orderStatusHistory.create({
           data: {
             id: randomUUID(),
@@ -594,7 +604,7 @@ export class AdminController {
             entityId: id,
           },
         });
-        return order;
+        return { id: order.id, reference: order.reference, status: order.status };
       }),
     };
   }
@@ -786,7 +796,7 @@ export class AdminController {
   @Get('finance')
   async finance(@Req() request: AuthenticatedRequest) {
     this.assertAdmin(request);
-    const [payments, settlements, paidTotal, pendingSettlementTotal] = await Promise.all([
+    const [payments, settlements, paidTotal, pendingSettlementTotal, pendingCashTotal] = await Promise.all([
       this.prisma.payment.findMany({
         select: {
           id: true,
@@ -808,6 +818,8 @@ export class AdminController {
       }),
       this.prisma.settlement.findMany({
         include: {
+          Order: { select: { reference: true } },
+          AttestationJob: { select: { reference: true } },
           Shop: { select: { name: true } },
           RiderProfile: { select: { User: { select: { name: true, email: true } } } },
           AgentProfile: { select: { businessName: true } },
@@ -816,7 +828,8 @@ export class AdminController {
         take: 200,
       }),
       this.prisma.payment.aggregate({ where: { status: 'PAID' }, _sum: { amount: true } }),
-      this.prisma.settlement.aggregate({ where: { status: 'PENDING' }, _sum: { amount: true } }),
+      this.prisma.settlement.aggregate({ where: { status: 'PENDING', kind: 'PAYOUT' }, _sum: { amount: true } }),
+      this.prisma.settlement.aggregate({ where: { status: 'PENDING', kind: 'CASH_REMITTANCE' }, _sum: { amount: true } }),
     ]);
     return {
       data: {
@@ -824,7 +837,53 @@ export class AdminController {
         settlements,
         paidTotal: Number(paidTotal._sum.amount ?? 0),
         pendingSettlementTotal: Number(pendingSettlementTotal._sum.amount ?? 0),
+        pendingCashTotal: Number(pendingCashTotal._sum.amount ?? 0),
       },
+    };
+  }
+
+  /**
+   * Records that a partner payout was sent, or that a rider handed over collected cash.
+   * The reference is the bank transfer or receipt number the finance team used.
+   */
+  @Patch('settlements/:id/paid')
+  async markSettlementPaid(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: SettlementPayoutDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    this.assertAdmin(request);
+    return {
+      data: await this.prisma.$transaction(async (transaction) => {
+        const settlement = await transaction.settlement.findUnique({
+          where: { id },
+          include: { Shop: { select: { ownerId: true } }, AgentProfile: { select: { userId: true } } },
+        });
+        if (!settlement) throw new NotFoundException('Settlement was not found');
+        const updated = await transaction.settlement.updateMany({
+          where: { id, status: 'PENDING' },
+          data: { status: 'PAID', reference: body.reference, paidAt: new Date(), updatedAt: new Date() },
+        });
+        if (updated.count !== 1) throw new BadRequestException('Only a pending settlement can be marked as paid');
+        await transaction.auditLog.create({
+          data: {
+            id: randomUUID(),
+            actorId: request.user.id,
+            action: settlement.kind === 'CASH_REMITTANCE' ? 'RIDER_CASH_RECEIVED' : 'SETTLEMENT_PAID',
+            entityId: id,
+          },
+        });
+        const recipient = settlement.Shop?.ownerId ?? settlement.AgentProfile?.userId ?? settlement.riderId;
+        await notifyUsers(
+          transaction,
+          [recipient],
+          settlement.kind === 'CASH_REMITTANCE' ? 'Cash handover recorded' : 'Payout sent',
+          settlement.kind === 'CASH_REMITTANCE'
+            ? `QuickDoc recorded your cash handover of LKR ${Number(settlement.amount).toFixed(2)} (ref ${body.reference}).`
+            : `QuickDoc sent a payout of LKR ${Number(settlement.amount).toFixed(2)} (ref ${body.reference}).`,
+        );
+        return transaction.settlement.findUniqueOrThrow({ where: { id } });
+      }),
     };
   }
 

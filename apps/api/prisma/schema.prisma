@@ -87,9 +87,11 @@ model AttestationJob {
   pricingSnapshot  Json?
   estimatedReadyAt DateTime?
   completedAt      DateTime?
+  cancelledAt      DateTime?
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
   custodyEvents    CustodyEvent[]
+  settlements      Settlement[]
 
   @@index([agentId, status])
   @@index([customerId, createdAt])
@@ -260,6 +262,7 @@ model Order {
   Payment              Payment?
   Review               Review?
   SupportTickets       SupportTicket[]
+  Settlement           Settlement[]
 
   @@unique([customerId, clientKey])
   @@index([customerId, createdAt])
@@ -579,22 +582,35 @@ model RiderProfile {
 }
 
 model Settlement {
-  id           String        @id @db.Uuid
-  shopId       String?       @db.Uuid
-  riderId      String?       @db.Uuid
-  agentId      String?       @db.Uuid
-  amount       Decimal       @db.Decimal(12, 2)
-  status       String        @default("PENDING")
-  reference    String?       @unique
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime
-  RiderProfile RiderProfile? @relation(fields: [riderId], references: [userId])
-  AgentProfile AgentProfile? @relation(fields: [agentId], references: [id])
-  Shop         Shop?         @relation(fields: [shopId], references: [id])
+  id               String          @id @db.Uuid
+  shopId           String?         @db.Uuid
+  riderId          String?         @db.Uuid
+  agentId          String?         @db.Uuid
+  orderId          String?         @db.Uuid
+  attestationJobId String?         @db.Uuid
+  /// PAYOUT: platform owes the partner. CASH_REMITTANCE: a rider owes the platform cash collected on delivery.
+  kind             String          @default("PAYOUT") @db.VarChar(24)
+  amount           Decimal         @db.Decimal(12, 2)
+  status           String          @default("PENDING")
+  reference        String?
+  idempotencyKey   String?         @unique
+  note             String?         @db.VarChar(500)
+  paidAt           DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime
+  RiderProfile     RiderProfile?   @relation(fields: [riderId], references: [userId])
+  AgentProfile     AgentProfile?   @relation(fields: [agentId], references: [id])
+  Shop             Shop?           @relation(fields: [shopId], references: [id])
+  Order            Order?          @relation(fields: [orderId], references: [id])
+  AttestationJob   AttestationJob? @relation(fields: [attestationJobId], references: [id])
 
   @@index([riderId, status])
   @@index([shopId, status])
   @@index([agentId, status])
+  @@index([orderId])
+  @@index([attestationJobId])
+  @@index([status, createdAt])
+  @@index([reference])
 }
 
 model ShopPrice {

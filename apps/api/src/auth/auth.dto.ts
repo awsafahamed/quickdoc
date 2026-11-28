@@ -2,6 +2,7 @@ import { IsEmail, IsNumber, IsOptional, IsString, Length, Max, Min } from 'class
 
 export class RegisterDto {
   @IsEmail()
+  @Length(3, 254)
   email!: string;
 
   @IsString()
@@ -14,8 +15,8 @@ export class RegisterDto {
 
   @IsOptional()
   @IsString()
+  @Length(7, 20)
   phone?: string;
-
 }
 
 export class ShopOwnerRegisterDto extends RegisterDto {
@@ -61,6 +62,7 @@ export class OtpVerifyDto extends OtpRequestDto {
 
 export class RefreshDto {
   @IsString()
+  @Length(32, 256)
   refreshToken!: string;
 }
 
@@ -77,6 +79,7 @@ export class ResetRequestDto {
 
 export class ResetPasswordDto {
   @IsString()
+  @Length(16, 256)
   token!: string;
 
   @IsString()

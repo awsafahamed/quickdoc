@@ -40,6 +40,9 @@ const statusLabels: Record<string, string> = {
   OUT_FOR_DELIVERY: 'Out for delivery',
   DELIVERED: 'Delivered',
   COMPLETED: 'Completed',
+  RETURNED: 'Returned to customer',
+  CANCELLED: 'Cancelled',
+  BOOKED: 'Booked',
 };
 
 const custodyActions: Record<string, { eventType: string; label: string }> = {
@@ -47,6 +50,7 @@ const custodyActions: Record<string, { eventType: string; label: string }> = {
   AGENT_RECEIVED: { eventType: 'PROCESSING', label: 'Start processing' },
   PROCESSING: { eventType: 'ATTESTED', label: 'Mark attestation complete' },
   ATTESTED: { eventType: 'RETURN_READY', label: 'Mark ready for return' },
+  RETURN_READY: { eventType: 'RETURNED', label: 'Confirm returned to customer' },
 };
 
 function Icon({ name }: { name: string }) {

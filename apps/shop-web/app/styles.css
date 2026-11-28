@@ -577,3 +577,8 @@ a { color: inherit; }
   .catalog-document-row > select { grid-column: 2; }
   .catalog-document-row > .icon-button { grid-column: 3; grid-row: 1 / span 3; }
 }
+
+/* Pickup handover code */
+.pickup-code { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.pickup-code strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 16px; letter-spacing: 0.16em; }
+.pickup-code__locked { flex-basis: 100%; color: #b45309; }

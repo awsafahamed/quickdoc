@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ConfigModule } from '@nestjs/config';
 import { resolve } from 'node:path';
 import { HealthModule } from './health/health.module';
@@ -12,6 +14,7 @@ import { AgentsModule } from './agents/agents.module';
 import { CustomerModule } from './customer/customer.module';
 import { AuthModule } from './auth/auth.module';
 import { SupportModule } from './support/support.module';
+import { OrdersModule } from './orders/orders.module';
 
 @Module({
   imports: [
@@ -19,6 +22,8 @@ import { SupportModule } from './support/support.module';
       isGlobal: true,
       envFilePath: [resolve(process.cwd(), '.env'), resolve(__dirname, '../../../.env')],
     }),
+    // Per-client-IP budget for all endpoints; sensitive routes set tighter limits with @Throttle.
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 240) }]),
     PrismaModule,
     AuthModule,
     HealthModule,
@@ -30,6 +35,8 @@ import { SupportModule } from './support/support.module';
     AgentsModule,
     CustomerModule,
     SupportModule,
+    OrdersModule,
   ],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

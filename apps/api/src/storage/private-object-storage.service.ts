@@ -19,6 +19,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
+import { PDFDocument } from 'pdf-lib';
 
 type LocalStorageOperation = 'upload' | 'preview';
 type LocalStorageToken = {
@@ -29,6 +30,21 @@ type LocalStorageToken = {
 };
 
 const MAX_DOCUMENT_SIZE_BYTES = 25 * 1024 * 1024;
+const MAX_PDF_PAGES = 10000;
+
+/** Parses the PDF and returns its page count; rejects files that are not readable PDFs. */
+export async function countPdfPages(document: Uint8Array): Promise<number> {
+  let pageCount: number;
+  try {
+    const pdf = await PDFDocument.load(document, { ignoreEncryption: true, updateMetadata: false });
+    pageCount = pdf.getPageCount();
+  } catch {
+    throw new BadRequestException('The PDF could not be read. Re-export it and upload it again.');
+  }
+  if (pageCount < 1) throw new BadRequestException('The PDF has no pages');
+  if (pageCount > MAX_PDF_PAGES) throw new BadRequestException(`PDFs can have at most ${MAX_PDF_PAGES} pages`);
+  return pageCount;
+}
 const CUSTOMER_PDF_KEY = /^private\/customers\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.pdf$/i;
 const SHOP_CATALOG_PDF_KEY = new RegExp(CUSTOMER_PDF_KEY.source.replace('customers', 'shops'), 'i');
 
@@ -206,7 +222,11 @@ export class PrivateObjectStorageService {
     }
   }
 
-  async verifyPdfUpload(objectKey: string, expectedSizeBytes: number): Promise<void> {
+  /**
+   * Confirms the uploaded object matches the declared size, is a readable PDF, and
+   * returns the page count taken from the file itself (never from the client).
+   */
+  async verifyPdfUpload(objectKey: string, expectedSizeBytes: number): Promise<number> {
     if (!CUSTOMER_PDF_KEY.test(objectKey) && !SHOP_CATALOG_PDF_KEY.test(objectKey)) {
       throw new BadRequestException('Private document key is invalid');
     }
@@ -226,7 +246,7 @@ export class PrivateObjectStorageService {
       if (document.subarray(0, 5).toString('ascii') !== '%PDF-') {
         throw new BadRequestException('The uploaded file is not a valid PDF');
       }
-      return;
+      return countPdfPages(document);
     }
 
     const client = this.getClient();
@@ -244,15 +264,15 @@ export class PrivateObjectStorageService {
       throw new BadRequestException('Uploaded PDF metadata does not match the selected file');
     }
 
-    const response = await client.send(new GetObjectCommand({
-      Bucket: this.bucket,
-      Key: objectKey,
-      Range: 'bytes=0-4',
-    }));
-    const signature = await response.Body?.transformToByteArray();
-    if (!signature || new TextDecoder().decode(signature) !== '%PDF-') {
+    const response = await client.send(new GetObjectCommand({ Bucket: this.bucket, Key: objectKey }));
+    const document = await response.Body?.transformToByteArray();
+    if (!document || document.length !== expectedSizeBytes) {
+      throw new BadRequestException('Uploaded PDF metadata does not match the selected file');
+    }
+    if (new TextDecoder().decode(document.subarray(0, 5)) !== '%PDF-') {
       throw new BadRequestException('The uploaded file is not a valid PDF');
     }
+    return countPdfPages(document);
   }
 
   async copyCatalogPdfToCustomer(sourceKey: string, destinationKey: string): Promise<void> {

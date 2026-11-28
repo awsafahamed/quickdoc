@@ -3,6 +3,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { PrintPricingService } from '../src/print/print-pricing.service';
 import { PrivateObjectStorageService } from '../src/storage/private-object-storage.service';
 import { DeliverySpeed, PrintColour, PrintPaperSize, PrintSides } from '../src/print/print.types';
+import { deliveryDistanceKm } from '../src/common/geo';
 
 describe('CustomerController private documents', () => {
   it('copies a currently published catalogue document into the signed-in customer’s document library', async () => {
@@ -109,17 +110,31 @@ describe('CustomerController private documents', () => {
 });
 
 describe('CustomerController print orders', () => {
-  it('uses the shared server pricing service for the persisted order total', async () => {
-    const createdOrder = { id: 'order-id', total: 25 };
+  const shop = { id: 'shop-id', ownerId: 'owner-id', latitude: 6.9, longitude: 79.85 };
+  const destination = { latitude: 6.93, longitude: 79.85 };
+  const clientKey = '5a3c9f1e-8d2b-4c7a-9e6f-1b2c3d4e5f60';
+
+  function setup(document: Record<string, unknown> = {}) {
+    const createdOrder = { id: 'order-id', reference: 'PR-ABC', total: 52.5, status: 'PENDING_ACCEPTANCE', deliveryPinHash: 'h', pickupCodeHash: 'h', deliveryPinEncrypted: null, pickupCodeEncrypted: null };
     const transaction = {
       order: { create: jest.fn().mockResolvedValue(createdOrder) },
       orderItem: { create: jest.fn() },
       orderStatusHistory: { create: jest.fn() },
+      payment: { create: jest.fn() },
+      document: { update: jest.fn() },
+      notification: { createMany: jest.fn() },
     };
     const prisma = {
       order: { findUnique: jest.fn().mockResolvedValue(null) },
-      shop: { findFirst: jest.fn().mockResolvedValue({ id: 'shop-id' }) },
-      document: { findFirst: jest.fn().mockResolvedValue({ id: 'document-id', pageCount: 20 }) },
+      shop: { findFirst: jest.fn().mockResolvedValue(shop) },
+      document: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'document-id',
+          pageCount: 20,
+          expiresAt: new Date(Date.now() + 60_000),
+          ...document,
+        }),
+      },
       $transaction: jest.fn((callback: (tx: typeof transaction) => Promise<unknown>) => callback(transaction)),
     } as unknown as PrismaService;
     const quote = {
@@ -133,30 +148,38 @@ describe('CustomerController print orders', () => {
       total: 52.5,
     };
     const pricing = { calculate: jest.fn().mockResolvedValue(quote) } as unknown as PrintPricingService;
-    const storage = {} as PrivateObjectStorageService;
-    const controller = new CustomerController(prisma, pricing, storage);
+    const controller = new CustomerController(prisma, pricing, {} as PrivateObjectStorageService);
+    return { controller, pricing, prisma, transaction };
+  }
 
-    await controller.createPrintOrder(
-      { user: { id: 'customer-id' } },
-      {
-        shopId: 'shop-id',
-        documentId: 'document-id',
-        paperSize: PrintPaperSize.A4,
-        colour: false,
-        duplex: true,
-        copies: 1,
-        printedSides: 20,
-        binding: true,
-        stapling: true,
-        lamination: true,
-        deliverySpeed: DeliverySpeed.EXPRESS,
-        deliveryDistanceKm: 5,
-        shopServiceCodes: ['premium-binding'],
-        deliveryAddress: '123 Test Street',
-        clientKey: 'client-key',
-      },
-    );
+  const order = (overrides: Record<string, unknown> = {}) => ({
+    shopId: 'shop-id',
+    documentId: 'document-id',
+    paperSize: PrintPaperSize.A4,
+    colour: false,
+    duplex: true,
+    copies: 1,
+    printedSides: 1,
+    binding: true,
+    stapling: true,
+    lamination: true,
+    deliverySpeed: DeliverySpeed.EXPRESS,
+    deliveryDistanceKm: 0,
+    deliveryLatitude: destination.latitude,
+    deliveryLongitude: destination.longitude,
+    shopServiceCodes: ['premium-binding'],
+    deliveryAddress: '123 Test Street',
+    clientKey,
+    ...overrides,
+  });
 
+  it('prices from the stored page count and server-computed distance, ignoring client claims', async () => {
+    const { controller, pricing, transaction } = setup();
+
+    await controller.createPrintOrder({ user: { id: 'customer-id' } }, order());
+
+    const expectedDistance = deliveryDistanceKm(shop, destination);
+    expect(expectedDistance).toBeGreaterThan(4);
     expect(pricing.calculate).toHaveBeenCalledWith({
       pageCount: 20,
       copies: 1,
@@ -167,7 +190,7 @@ describe('CustomerController print orders', () => {
       stapling: true,
       lamination: true,
       deliverySpeed: DeliverySpeed.EXPRESS,
-      deliveryDistanceKm: 5,
+      deliveryDistanceKm: expectedDistance,
       shopId: 'shop-id',
       shopServiceCodes: ['premium-binding'],
     });
@@ -177,21 +200,79 @@ describe('CustomerController print orders', () => {
         deliveryFee: 24,
         platformFee: 4.5,
         total: 52.5,
+        deliveryDistanceKm: expectedDistance,
+        reference: expect.stringMatching(/^PR-[0-9A-F]{10}$/),
+        pickupCodeEncrypted: expect.stringMatching(/^v1\./),
+        deliveryPinEncrypted: expect.stringMatching(/^v1\./),
         shopServiceSnapshot: [{ code: 'premium-binding', name: 'Premium binding', price: 8 }],
       }),
     }));
     expect(transaction.orderItem.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ binding: 'BINDING', stapling: true, lamination: true }),
+      data: expect.objectContaining({ printedSides: 20, binding: 'BINDING', stapling: true, lamination: true }),
     }));
+    expect(transaction.payment.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ method: 'CASH_ON_DELIVERY', status: 'PENDING', amount: 52.5 }),
+    });
+    expect(transaction.notification.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ userId: 'owner-id', title: 'New print order' })],
+    });
+  });
+
+  it('never returns handover code hashes or ciphertexts', async () => {
+    const { controller } = setup();
+    const result = await controller.createPrintOrder({ user: { id: 'customer-id' } }, order());
+    expect(result.data).not.toHaveProperty('deliveryPinHash');
+    expect(result.data).not.toHaveProperty('pickupCodeHash');
+    expect(result.data).not.toHaveProperty('pickupCodeEncrypted');
+  });
+
+  it('refuses documents without a verified page count', async () => {
+    const { controller, pricing } = setup({ pageCount: null });
+    await expect(controller.createPrintOrder({ user: { id: 'customer-id' } }, order()))
+      .rejects.toThrow('no verified page count');
+    expect(pricing.calculate).not.toHaveBeenCalled();
+  });
+
+  it('refuses addresses outside the delivery area', async () => {
+    const { controller } = setup();
+    await expect(controller.createPrintOrder(
+      { user: { id: 'customer-id' } },
+      order({ deliveryLatitude: 9.66, deliveryLongitude: 80.02 }),
+    )).rejects.toThrow('beyond the');
+  });
+
+  it('returns the existing order for a repeated client key', async () => {
+    const { controller, prisma, pricing } = setup();
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({ id: 'existing', status: 'ACCEPTED', deliveryPinHash: 'x' });
+    const result = await controller.createPrintOrder({ user: { id: 'customer-id' } }, order());
+    expect(result).toEqual({ data: expect.objectContaining({ id: 'existing' }), idempotent: true });
+    expect(result.data).not.toHaveProperty('deliveryPinHash');
+    expect(pricing.calculate).not.toHaveBeenCalled();
   });
 });
 
 describe('CustomerController delivery confirmation', () => {
   it('completes only the signed-in customer’s delivered order and notifies the shop and rider', async () => {
     const transaction = {
-      order: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      order: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'order-id',
+          reference: 'PR-123',
+          status: 'COMPLETED',
+          shopId: 'shop-id',
+          currency: 'LKR',
+          total: 100,
+          printSubtotal: 60,
+          commission: 6,
+          DeliveryAssignment: { riderId: 'rider-id', earnings: 25 },
+          Payment: { method: 'CASH_ON_DELIVERY', status: 'PAID' },
+        }),
+      },
       orderStatusHistory: { create: jest.fn() },
       notification: { createMany: jest.fn() },
+      financialLedgerEntry: { createMany: jest.fn() },
+      settlement: { createMany: jest.fn() },
     };
     const prisma = {
       order: {
@@ -214,9 +295,25 @@ describe('CustomerController delivery confirmation', () => {
       where: { id: 'order-id', customerId: 'customer-id' },
     }));
     expect(transaction.order.updateMany).toHaveBeenCalledWith({
-      where: { id: 'order-id', customerId: 'customer-id', status: 'DELIVERED' },
+      where: { id: 'order-id', status: 'DELIVERED' },
       data: { status: 'COMPLETED' },
     });
+    // Shop is paid its subtotal less commission, the rider their earnings, and the rider
+    // owes the platform the cash collected on delivery.
+    expect(transaction.settlement.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ shopId: 'shop-id', kind: 'PAYOUT', amount: 54, idempotencyKey: 'order:order-id:shop-payout' }),
+        expect.objectContaining({ riderId: 'rider-id', kind: 'PAYOUT', amount: 25, idempotencyKey: 'order:order-id:rider-payout' }),
+        expect.objectContaining({ riderId: 'rider-id', kind: 'CASH_REMITTANCE', amount: 100, idempotencyKey: 'order:order-id:rider-cash' }),
+      ],
+      skipDuplicates: true,
+    });
+    expect(transaction.financialLedgerEntry.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.arrayContaining([
+        expect.objectContaining({ account: 'PLATFORM_REVENUE', amount: 21 }),
+      ]),
+      skipDuplicates: true,
+    }));
     expect(transaction.notification.createMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([
         expect.objectContaining({ userId: 'shop-owner-id', title: 'Delivery confirmed' }),

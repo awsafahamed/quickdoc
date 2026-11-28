@@ -1,51 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrintShop } from './shop.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { distanceInKm } from '../common/geo';
+import type { Prisma } from '@prisma/client';
 
-function distanceInKm(latitudeA: number, longitudeA: number, latitudeB: number, longitudeB: number) {
-  const radians = (degrees: number) => degrees * Math.PI / 180;
-  const latitudeDelta = radians(latitudeB - latitudeA);
-  const longitudeDelta = radians(longitudeB - longitudeA);
-  const haversine = Math.sin(latitudeDelta / 2) ** 2
-    + Math.cos(radians(latitudeA)) * Math.cos(radians(latitudeB))
-    * Math.sin(longitudeDelta / 2) ** 2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
-}
-
-const SHOPS: PrintShop[] = [
-  {
-    id: 'shop-al-barsha',
-    name: 'Paper & Press, Al Barsha',
-    description: 'Full-service digital printing with careful finishing and same-day preparation.',
-    address: 'Al Barsha 1, Dubai',
-    distanceKm: 2.4,
-    rating: 4.8,
-    reviewCount: 126,
-    estimatedMinutes: 45,
-    operatingStatus: 'OPEN',
-    capabilities: ['A4', 'A3', 'A5', 'COLOUR', 'BINDING', 'STAPLING', 'LAMINATION'],
-    supportedPaperSizes: ['A4', 'A3', 'A5'],
-    colourPrinting: true,
-    services: [],
-    printPrices: [],
-  },
-  {
-    id: 'shop-jlt',
-    name: 'The Copy Room, JLT',
-    description: 'Reliable everyday printing for documents, presentations and business packs.',
-    address: 'Cluster X, Jumeirah Lakes Towers',
-    distanceKm: 5.8,
-    rating: 4.6,
-    reviewCount: 84,
-    estimatedMinutes: 60,
-    operatingStatus: 'OPEN',
-    capabilities: ['A4', 'A3', 'COLOUR', 'BINDING', 'STAPLING'],
-    supportedPaperSizes: ['A4', 'A3'],
-    colourPrinting: true,
-    services: [],
-    printPrices: [],
-  },
-];
 
 @Injectable()
 export class ShopsService {
@@ -67,41 +25,8 @@ export class ShopsService {
       },
       include: { services: true, ShopPrice: true },
     });
-    return shops.map((shop): PrintShop => {
-      const availableServices = shop.services.filter(
-        (service) => service.enabled && service.reviewStatus === 'APPROVED',
-      );
-      return {
-        id: shop.id,
-        name: shop.name,
-        description: 'Verified printing partner.',
-        address: shop.address,
-        distanceKm: latitude === undefined || longitude === undefined
-          ? null
-          : distanceInKm(latitude, longitude, Number(shop.latitude), Number(shop.longitude)),
-        rating: 0,
-        reviewCount: 0,
-        estimatedMinutes: 45,
-        operatingStatus: 'OPEN',
-        capabilities: availableServices.map((service) => service.code),
-        supportedPaperSizes: availableServices.flatMap((service) => service.code.startsWith('PAPER_') ? [service.code.replace('PAPER_', '')] : []),
-        colourPrinting: availableServices.some((service) => service.code === 'COLOUR'),
-        services: availableServices
-          .filter((service) => service.isCustom)
-          .map((service) => ({
-            code: service.code,
-            name: service.name,
-            description: service.description,
-            price: Number(service.price),
-          })),
-        printPrices: shop.ShopPrice.map((price) => ({
-          paperSize: price.paperSize,
-          colour: price.colour,
-          duplex: price.duplex,
-          pricePerSide: Number(price.pricePerSide),
-        })),
-      };
-    }).filter((shop) => {
+    const ratings = await this.ratingsFor(shops.map((shop) => shop.id));
+    return shops.map((shop) => this.toPrintShop(shop, ratings, latitude, longitude)).filter((shop) => {
       const matchesSearch = !normalizedSearch
         || shop.name.toLowerCase().includes(normalizedSearch)
         || shop.address.toLowerCase().includes(normalizedSearch);
@@ -113,6 +38,61 @@ export class ShopsService {
       if (right.distanceKm === null) return -1;
       return left.distanceKm - right.distanceKm;
     });
+  }
+
+  private async ratingsFor(shopIds: string[]) {
+    if (!shopIds.length) return new Map<string, { rating: number; reviewCount: number }>();
+    const rows = await this.prisma.review.groupBy({
+      by: ['shopId'],
+      where: { shopId: { in: shopIds } },
+      _avg: { shopRating: true },
+      _count: { _all: true },
+    });
+    return new Map(rows.map((row) => [row.shopId, {
+      rating: Math.round((row._avg.shopRating ?? 0) * 10) / 10,
+      reviewCount: row._count._all,
+    }]));
+  }
+
+  private toPrintShop(
+    shop: Prisma.ShopGetPayload<{ include: { services: true; ShopPrice: true } }>,
+    ratings: Map<string, { rating: number; reviewCount: number }>,
+    latitude?: number,
+    longitude?: number,
+  ): PrintShop {
+    const availableServices = shop.services.filter(
+      (service) => service.enabled && service.reviewStatus === 'APPROVED',
+    );
+    return {
+      id: shop.id,
+      name: shop.name,
+      description: 'Verified printing partner.',
+      address: shop.address,
+      distanceKm: latitude === undefined || longitude === undefined
+        ? null
+        : distanceInKm(latitude, longitude, Number(shop.latitude), Number(shop.longitude)),
+      rating: ratings.get(shop.id)?.rating ?? 0,
+      reviewCount: ratings.get(shop.id)?.reviewCount ?? 0,
+      estimatedMinutes: 45,
+      operatingStatus: shop.isOpen ? 'OPEN' : 'CLOSED',
+      capabilities: availableServices.map((service) => service.code),
+      supportedPaperSizes: availableServices.flatMap((service) => service.code.startsWith('PAPER_') ? [service.code.replace('PAPER_', '')] : []),
+      colourPrinting: availableServices.some((service) => service.code === 'COLOUR'),
+      services: availableServices
+        .filter((service) => service.isCustom)
+        .map((service) => ({
+          code: service.code,
+          name: service.name,
+          description: service.description,
+          price: Number(service.price),
+        })),
+      printPrices: shop.ShopPrice.map((price) => ({
+        paperSize: price.paperSize,
+        colour: price.colour,
+        duplex: price.duplex,
+        pricePerSide: Number(price.pricePerSide),
+      })),
+    };
   }
 
   async findCatalogDocuments(search?: string, latitude?: number, longitude?: number, shopId?: string) {
@@ -172,9 +152,12 @@ export class ShopsService {
     ));
   }
 
-  findById(id: string): PrintShop {
-    const shop = SHOPS.find((item) => item.id === id);
+  async findById(id: string, latitude?: number, longitude?: number): Promise<PrintShop> {
+    const shop = await this.prisma.shop.findFirst({
+      where: { id, status: 'APPROVED' },
+      include: { services: true, ShopPrice: true },
+    });
     if (!shop) throw new NotFoundException('Print shop was not found');
-    return shop;
+    return this.toPrintShop(shop, await this.ratingsFor([shop.id]), latitude, longitude);
   }
 }

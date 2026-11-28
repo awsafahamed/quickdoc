@@ -11,6 +11,7 @@ const allowedSections = new Set([
   'services',
   'catalog',
   'finance',
+  'settlements',
   'support',
   'settings',
   'audit',

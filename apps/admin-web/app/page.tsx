@@ -365,15 +365,55 @@ function OrderRow({ order, onAction, busy }: { order: AdminOrder; onAction: (id:
 
 type FinanceData = {
   payments: { id: string; amount: number | string; method: string; status: string; gatewayReference: string | null; createdAt: string; Order: { reference: string; currency: string; customer: { name: string; email: string } } }[];
-  settlements: { id: string; amount: number | string; status: string; reference: string | null; createdAt: string; Shop: { name: string } | null; RiderProfile: { User: { name: string; email: string } } | null; AgentProfile: { businessName: string } | null }[];
+  settlements: { id: string; kind?: string; amount: number | string; status: string; reference: string | null; note?: string | null; paidAt?: string | null; createdAt: string; Order?: { reference: string } | null; AttestationJob?: { reference: string } | null; Shop: { name: string } | null; RiderProfile: { User: { name: string; email: string } } | null; AgentProfile: { businessName: string } | null }[];
   paidTotal: number;
   pendingSettlementTotal: number;
+  pendingCashTotal?: number;
 };
+
+function SettlementRow({ settlement, onPaid }: { settlement: FinanceData['settlements'][number]; onPaid: (id: string, reference: string) => Promise<boolean> }) {
+  const [reference, setReference] = useState('');
+  const [busy, setBusy] = useState(false);
+  const remittance = settlement.kind === 'CASH_REMITTANCE';
+  const partner = settlement.Shop?.name ?? settlement.RiderProfile?.User.name ?? settlement.AgentProfile?.businessName ?? 'Unassigned partner';
+  return <tr>
+    <td><strong className="table-primary">{settlement.Order?.reference ?? settlement.AttestationJob?.reference ?? '—'}</strong><span className="table-secondary">{settlement.note ?? ''}</span></td>
+    <td>{partner}<span className="table-secondary">{remittance ? 'Rider owes QuickDoc (cash collected)' : 'QuickDoc owes partner'}</span></td>
+    <td><StatusBadge status={settlement.status} />{settlement.reference && <span className="table-secondary">Ref {settlement.reference}</span>}</td>
+    <td>{formatMoney(settlement.amount, 'LKR')}</td>
+    <td>{formatDate(settlement.createdAt)}</td>
+    <td>{settlement.status === 'PENDING' ? <div className="order-status-control">
+      <label className="sr-only" htmlFor={`settlement-ref-${settlement.id}`}>{remittance ? 'Receipt number' : 'Transfer reference'} for {partner}</label>
+      <input id={`settlement-ref-${settlement.id}`} disabled={busy} value={reference} maxLength={120} onChange={(event) => setReference(event.target.value)} placeholder={remittance ? 'Receipt no.' : 'Transfer ref'} />
+      <button className="table-action" type="button" disabled={busy || reference.trim().length < 3} onClick={() => {
+        if (!window.confirm(remittance ? `Record ${formatMoney(settlement.amount, 'LKR')} cash received from ${partner}?` : `Record a payout of ${formatMoney(settlement.amount, 'LKR')} to ${partner}?`)) return;
+        setBusy(true);
+        void onPaid(settlement.id, reference.trim()).then((saved) => { if (saved) setReference(''); }).finally(() => setBusy(false));
+      }}>{remittance ? 'Cash received' : 'Mark paid'}</button>
+    </div> : <span className="table-secondary">{settlement.paidAt ? formatDate(settlement.paidAt) : '—'}</span>}</td>
+  </tr>;
+}
 
 function FinancePage({ onSessionExpired }: { onSessionExpired: () => void }) {
   const [finance, setFinance] = useState<FinanceData | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState('');
+  const markPaid = async (id: string, reference: string) => {
+    setError('');
+    setNotice('');
+    try {
+      await adminRequest(`/admin/settlements/${encodeURIComponent(id)}/paid`, { method: 'PATCH', body: JSON.stringify({ reference }) });
+      const result = await adminRequest<{ data: FinanceData }>('/admin/finance');
+      setFinance(result.data);
+      setNotice('Settlement recorded and the partner was notified.');
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The settlement could not be updated.');
+      if (reason instanceof AdminApiError && reason.status === 401) onSessionExpired();
+      return false;
+    }
+  };
   useEffect(() => {
     adminRequest<{ data: FinanceData }>('/admin/finance')
       .then((result) => setFinance(result.data))
@@ -383,14 +423,15 @@ function FinancePage({ onSessionExpired }: { onSessionExpired: () => void }) {
       })
       .finally(() => setLoading(false));
   }, []);
-  return <section className="admin-content"><PageHeading title="Finance" description="Read-only payment and settlement records. Payment outcomes must be reconciled with the payment provider." />
+  return <section className="admin-content"><PageHeading title="Finance" description="Cash-on-delivery payments, partner payouts and rider cash handovers. Record a settlement only after the money has actually moved." />
     {error && <ErrorNotice message={error} onRetry={() => window.location.reload()} />}
+    {notice && <p className="operational-note" role="status">{notice}</p>}
     {loading && <LoadingBlock label="Loading financial records" />}
     {finance && <>
-      <div className="metric-grid metric-grid--finance"><Metric label="Payments received" value={finance.payments.length} detail="Recent payment records" /><article className="metric-card"><span>Paid total</span><strong className="metric-card__money">{formatMoney(finance.paidTotal, 'LKR')}</strong><p>All confirmed payment records</p></article><article className="metric-card"><span>Awaiting settlement</span><strong className="metric-card__money">{formatMoney(finance.pendingSettlementTotal, 'LKR')}</strong><p>Pending settlement records</p></article><Metric label="Settlements" value={finance.settlements.length} detail="Recent partner settlements" /></div>
+      <div className="metric-grid metric-grid--finance"><Metric label="Payments received" value={finance.payments.length} detail="Recent payment records" /><article className="metric-card"><span>Paid total</span><strong className="metric-card__money">{formatMoney(finance.paidTotal, 'LKR')}</strong><p>All confirmed payment records</p></article><article className="metric-card"><span>Payouts owed</span><strong className="metric-card__money">{formatMoney(finance.pendingSettlementTotal, 'LKR')}</strong><p>Pending partner payouts</p></article><article className="metric-card"><span>Cash held by riders</span><strong className="metric-card__money">{formatMoney(finance.pendingCashTotal ?? 0, 'LKR')}</strong><p>Collected on delivery, not yet handed over</p></article><Metric label="Settlements" value={finance.settlements.length} detail="Recent partner settlements" /></div>
       <h2 className="subsection-title">Payments</h2><div className="data-table"><table><thead><tr><th>Order</th><th>Customer</th><th>Method</th><th>Status</th><th>Amount</th><th>Recorded</th></tr></thead><tbody>{finance.payments.map((payment) => <tr key={payment.id}><td>{payment.Order.reference}</td><td>{payment.Order.customer.name}<span className="table-secondary">{payment.Order.customer.email}</span></td><td>{formatStatus(payment.method)}</td><td><StatusBadge status={payment.status} /></td><td>{formatMoney(payment.amount, payment.Order.currency)}</td><td>{formatDate(payment.createdAt)}</td></tr>)}{finance.payments.length === 0 && <tr><td colSpan={6}><div className="table-empty"><strong>No payments recorded</strong></div></td></tr>}</tbody></table></div>
-      <h2 className="subsection-title">Partner settlements</h2><div className="data-table"><table><thead><tr><th>Reference</th><th>Partner</th><th>Status</th><th>Amount</th><th>Created</th></tr></thead><tbody>{finance.settlements.map((settlement) => <tr key={settlement.id}><td>{settlement.reference ?? '—'}</td><td>{settlement.Shop?.name ?? settlement.RiderProfile?.User.name ?? settlement.AgentProfile?.businessName ?? 'Unassigned partner'}</td><td><StatusBadge status={settlement.status} /></td><td>{formatMoney(settlement.amount, 'LKR')}</td><td>{formatDate(settlement.createdAt)}</td></tr>)}{finance.settlements.length === 0 && <tr><td colSpan={5}><div className="table-empty"><strong>No settlements recorded</strong></div></td></tr>}</tbody></table></div>
-      <p className="operational-note">Financial records are displayed for reconciliation only. This panel does not create refunds, mark payments as paid, or release settlements.</p>
+      <h2 className="subsection-title">Settlements</h2><div className="data-table"><table><thead><tr><th>For</th><th>Partner</th><th>Status</th><th>Amount</th><th>Created</th><th>Record</th></tr></thead><tbody>{finance.settlements.map((settlement) => <SettlementRow key={settlement.id} settlement={settlement} onPaid={markPaid} />)}{finance.settlements.length === 0 && <tr><td colSpan={6}><div className="table-empty"><strong>No settlements recorded</strong></div></td></tr>}</tbody></table></div>
+      <p className="operational-note">Settlements are created automatically when an order or attestation completes. Recording one here does not move money; it confirms a transfer or cash handover you have already made. Online card payments and refunds are not enabled.</p>
     </>}</section>;
 }
 

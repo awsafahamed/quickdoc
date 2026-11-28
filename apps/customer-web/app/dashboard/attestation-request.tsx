@@ -184,8 +184,8 @@ export default function AttestationRequestFlow({
       setError('Your quote expired. Get a new quote before placing the booking.');
       return;
     }
-    const token = window.sessionStorage.getItem('print-attest-access-token');
-    if (!token) {
+    const token = window.sessionStorage.getItem('print-attest-access-token') ?? '';
+    if (!token && !window.localStorage.getItem('print-attest-refresh-token')) {
       setError('Your sign-in has expired. Sign in again to place this booking.');
       return;
     }

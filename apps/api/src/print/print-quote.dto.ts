@@ -43,6 +43,20 @@ export class PrintQuoteDto {
   deliveryDistanceKm!: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  deliveryLatitude?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  deliveryLongitude?: number;
+
+  @IsOptional()
   @IsUUID()
   shopId?: string;
 

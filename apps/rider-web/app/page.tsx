@@ -14,7 +14,18 @@ type RiderAssignment = {
   id: string;
   earnings: number | string;
   assignedAt: string;
-  Order: { id: string; reference: string; status: string; deliveryAddress: unknown };
+  Order: {
+    id: string;
+    reference: string;
+    status: string;
+    deliveryAddress: unknown;
+    instructions?: string | null;
+    total?: number | string;
+    currency?: string;
+    Payment?: { method: string; status: string; amount: number | string } | null;
+    Shop?: { name: string; address: string; phone: string; latitude: number | string; longitude: number | string } | null;
+    customer?: { name: string; CustomerProfile?: { phone?: string | null } | null } | null;
+  };
   DeliveryStatusHistory: { id: string; status: string; reason: string | null; createdAt: string }[];
 };
 type RiderOffer = {
@@ -42,9 +53,10 @@ async function riderResponseError(response: Response, fallback: string) {
 
 async function riderRequest<T>(path: string, options: RequestInit & { bodyData?: unknown } = {}): Promise<T> {
   const token = window.sessionStorage.getItem('rider-access-token');
-  if (!token) throw new Error('Your rider session has expired. Sign in again.');
+  if (!token && !window.localStorage.getItem('rider-refresh-token')) throw new Error('Your rider session has expired. Sign in again.');
   const headers = new Headers(options.headers);
-  headers.set('Authorization', `Bearer ${token}`);
+  // An empty bearer lets the session interceptor renew the token from the stored refresh token.
+  headers.set('Authorization', `Bearer ${token ?? ''}`);
   if (options.bodyData !== undefined) headers.set('Content-Type', 'application/json');
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -122,11 +134,11 @@ export default function RiderPortal() {
 
   useEffect(() => {
     const token = window.sessionStorage.getItem('rider-access-token');
-    if (!token) {
+    if (!token && !window.localStorage.getItem('rider-refresh-token')) {
       setCheckingSession(false);
       return;
     }
-    fetch(`${API_URL}/riders/me`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${API_URL}/riders/me`, { headers: { Authorization: `Bearer ${token ?? ''}` } })
       .then(async (response) => {
         if (!response.ok) throw new Error('Rider session could not be verified.');
         return response.json() as Promise<{ data: RiderProfile }>;
@@ -528,7 +540,9 @@ function ActiveDeliveryPage({ assignments, onUpdated }: { assignments: RiderAssi
   return <section className="rider-content"><div className="shop-heading"><div><p>Current task</p><h1>Active delivery</h1></div></div>
     {error && <p className="registration-error" role="alert">{error}</p>}
     {!selected ? <div className="empty-workspace"><h2>No active delivery</h2><p>Accept a nearby request to start a delivery.</p></div> : <div className="active-layout">
-      <section className="delivery-detail-card"><div className="delivery-detail-heading"><div><span>Order reference</span><h2>{selected.Order.reference}</h2></div><strong>{selected.Order.status.replaceAll('_', ' ')}</strong></div><div className="delivery-address"><span>Customer delivery address</span><p>{addressText(selected.Order.deliveryAddress)}</p></div>
+      <section className="delivery-detail-card"><div className="delivery-detail-heading"><div><span>Order reference</span><h2>{selected.Order.reference}</h2></div><strong>{selected.Order.status.replaceAll('_', ' ')}</strong></div>{selected.Order.Shop && <div className="delivery-address"><span>Pick up from</span><p><strong>{selected.Order.Shop.name}</strong><br />{selected.Order.Shop.address}</p><p className="delivery-contact"><a href={`tel:${selected.Order.Shop.phone}`}>Call shop</a> · <a href={`https://www.google.com/maps/dir/?api=1&destination=${selected.Order.Shop.latitude},${selected.Order.Shop.longitude}`} target="_blank" rel="noreferrer">Directions</a></p></div>}
+        <div className="delivery-address"><span>Deliver to</span><p>{selected.Order.customer?.name && <><strong>{selected.Order.customer.name}</strong><br /></>}{addressText(selected.Order.deliveryAddress)}</p>{selected.Order.instructions && <p><small>Note: {selected.Order.instructions}</small></p>}<p className="delivery-contact">{selected.Order.customer?.CustomerProfile?.phone && <><a href={`tel:${selected.Order.customer.CustomerProfile.phone}`}>Call customer</a> · </>}{mapsLink(selected.Order.deliveryAddress) && <a href={mapsLink(selected.Order.deliveryAddress)!} target="_blank" rel="noreferrer">Directions</a>}</p></div>
+        {selected.Order.Payment?.method === 'CASH_ON_DELIVERY' && <div className="cash-collect"><span>Collect in cash</span><strong>{selected.Order.currency ?? 'LKR'} {Number(selected.Order.Payment.amount).toFixed(2)}</strong><small>{selected.Order.Payment.status === 'PAID' ? 'Recorded as collected' : 'Collect before entering the delivery PIN.'}</small></div>}
         <h3>Delivery progress</h3><div className="delivery-history">{selected.DeliveryStatusHistory.map((event) => <div key={event.id}><i /><span><strong>{event.status.replaceAll('_', ' ')}</strong><small>{new Date(event.createdAt).toLocaleString()}{event.reason ? ` · ${event.reason}` : ''}</small></span></div>)}</div>
       </section>
       <aside className="handover-panel"><h2>Update delivery</h2>{selected.Order.status === 'RIDER_ASSIGNED' && <form onSubmit={(event) => { event.preventDefault(); void updateStatus('PICKED_UP', { handoverCode: handoverCode.trim() }); }}><label>Shop pickup code<input value={handoverCode} onChange={(event) => setHandoverCode(event.target.value.toUpperCase())} inputMode="text" autoComplete="one-time-code" maxLength={6} pattern="[A-Fa-f0-9]{6}" required /></label><small>Ask the shop to provide the pickup code in person.</small><button type="submit" disabled={busy || !/^[A-Fa-f0-9]{6}$/.test(handoverCode)}>{busy ? 'Verifying…' : 'Confirm pickup'}</button></form>}
@@ -538,6 +552,13 @@ function ActiveDeliveryPage({ assignments, onUpdated }: { assignments: RiderAssi
       </aside>
     </div>}
   </section>;
+}
+
+function mapsLink(address: unknown): string | null {
+  if (!address || typeof address !== 'object') return null;
+  const { latitude, longitude } = address as { latitude?: unknown; longitude?: unknown };
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') return null;
+  return `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`;
 }
 
 function HistoryPage({ assignments, loading }: { assignments: RiderAssignment[]; loading: boolean }) {
@@ -574,7 +595,7 @@ function ProfilePage({ profile, onSaved }: { profile: RiderProfile; onSaved: (pr
 }
 
 function EarningsPage() {
-  const [earnings, setEarnings] = useState<{ earned: number; pending: number; settlements?: { id: string; amount: number | string; status: string; reference?: string | null; createdAt: string }[] }>({ earned: 0, pending: 0, settlements: [] });
+  const [earnings, setEarnings] = useState<{ earned: number; pending: number; cashToRemit?: number; settlements?: { id: string; amount: number | string; status: string; reference?: string | null; note?: string | null; createdAt: string }[] }>({ earned: 0, pending: 0, cashToRemit: 0, settlements: [] });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
@@ -589,6 +610,6 @@ function EarningsPage() {
     return () => { active = false; };
   }, [reloadKey]);
   return <section className="rider-content"><div className="shop-heading"><div><p>Earnings</p><h1>Settlements</h1></div><button className="rider-refresh" type="button" onClick={() => setReloadKey((key) => key + 1)} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button></div>{error && <p className="registration-error" role="alert">{error}<button type="button" onClick={() => setReloadKey((key) => key + 1)}>Retry</button></p>}
-    <div className="earnings-grid"><article><span>Total earned</span><strong>{loading ? '—' : `LKR ${Number(earnings.earned).toFixed(2)}`}</strong></article><article><span>Pending settlement</span><strong>{loading ? '—' : `LKR ${Number(earnings.pending).toFixed(2)}`}</strong></article></div>
+    <div className="earnings-grid"><article><span>Total earned</span><strong>{loading ? '—' : `LKR ${Number(earnings.earned).toFixed(2)}`}</strong></article><article><span>Pending settlement</span><strong>{loading ? '—' : `LKR ${Number(earnings.pending).toFixed(2)}`}</strong></article><article><span>Cash to hand over</span><strong>{loading ? '—' : `LKR ${Number(earnings.cashToRemit ?? 0).toFixed(2)}`}</strong><small>Cash collected from customers that you still owe QuickDoc.</small></article></div>
     <h2 className="rider-section-title">Settlement history</h2>{loading && !earnings.settlements?.length ? <div className="empty-workspace" role="status">Loading settlements…</div> : earnings.settlements?.length ? <div className="delivery-list">{earnings.settlements.map((item) => <article className="delivery-request" key={item.id}><div><strong>{item.reference ?? `Settlement ${item.id.slice(0, 8)}`}</strong><p>{item.status.replaceAll('_', ' ')} · {new Date(item.createdAt).toLocaleDateString()}</p></div><span>LKR {Number(item.amount).toFixed(2)}</span></article>)}</div> : !error && <div className="empty-workspace"><h2>No settlements recorded</h2><p>Completed rider settlements will appear here.</p></div>}</section>;
 }

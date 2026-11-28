@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PrivateObjectStorageService } from '../src/storage/private-object-storage.service';
+import { makePdf } from './pdf-fixture';
 
 describe('PrivateObjectStorageService local test backend', () => {
   let directory: string;
@@ -43,11 +44,12 @@ describe('PrivateObjectStorageService local test backend', () => {
   it('stores, validates, previews, and deletes a private PDF through expiring links', async () => {
     const storage = createStorage();
     const key = objectKey();
-    const pdf = Buffer.from('%PDF-1.4\nlocal test document');
+    const pdf = await makePdf(3);
     const uploadToken = tokenFrom(await storage.createUploadUrl(key));
 
     await storage.writeLocalUpload(uploadToken, 'application/pdf', pdf);
-    await expect(storage.verifyPdfUpload(key, pdf.length)).resolves.toBeUndefined();
+    // The page count comes from parsing the file, not from anything the client declared.
+    await expect(storage.verifyPdfUpload(key, pdf.length)).resolves.toBe(3);
 
     const previewToken = tokenFrom(await storage.createPreviewUrl(key, 'local test.pdf'));
     await expect(storage.readLocalPreview(previewToken)).resolves.toEqual({
@@ -79,17 +81,25 @@ describe('PrivateObjectStorageService local test backend', () => {
     const storage = createStorage();
     const sourceKey = shopObjectKey();
     const customerKey = objectKey();
-    const pdf = Buffer.from('%PDF-1.4\ncatalog document');
+    const pdf = await makePdf(2);
     const uploadToken = tokenFrom(await storage.createUploadUrl(sourceKey));
 
     await storage.writeLocalUpload(uploadToken, 'application/pdf', pdf);
     await storage.copyCatalogPdfToCustomer(sourceKey, customerKey);
-    await expect(storage.verifyPdfUpload(customerKey, pdf.length)).resolves.toBeUndefined();
+    await expect(storage.verifyPdfUpload(customerKey, pdf.length)).resolves.toBe(2);
     const previewToken = tokenFrom(await storage.createPreviewUrl(customerKey, 'selected.pdf'));
     await expect(storage.readLocalPreview(previewToken)).resolves.toEqual({
       body: pdf,
       fileName: 'selected.pdf',
     });
+  });
+
+  it('rejects a file that only imitates a PDF header', async () => {
+    const storage = createStorage();
+    const key = objectKey();
+    const fake = Buffer.from('%PDF-1.4\nthis is not really a PDF');
+    await storage.writeLocalUpload(tokenFrom(await storage.createUploadUrl(key)), 'application/pdf', fake);
+    await expect(storage.verifyPdfUpload(key, fake.length)).rejects.toThrow('could not be read');
   });
 
   it('refuses local filesystem storage in production', async () => {
