@@ -28,6 +28,7 @@ async function bootstrap(): Promise<void> {
   }));
   app.setGlobalPrefix('api/v1');
   app.use('/api/v1/storage/local', express.raw({ type: 'application/pdf', limit: '25mb' }));
+  app.use('/api/v1/storage/upload', express.raw({ type: 'application/pdf', limit: '25mb' }));
   app.use(express.json({ limit: '100kb' }));
   app.use(express.urlencoded({ extended: false, limit: '100kb' }));
 

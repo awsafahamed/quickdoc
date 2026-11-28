@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { PrivateObjectStorageService } from './private-object-storage.service';
-import { PrivateLocalStorageController } from './private-local-storage.controller';
+import { PrivateLocalStorageController, PrivateUploadController } from './private-local-storage.controller';
 
 @Module({
-  controllers: [PrivateLocalStorageController],
+  controllers: [PrivateLocalStorageController, PrivateUploadController],
   providers: [PrivateObjectStorageService],
   exports: [PrivateObjectStorageService],
 })
