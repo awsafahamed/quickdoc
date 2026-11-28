@@ -9,6 +9,12 @@ export const SHOP_COMMISSION_RATE = 0.1;
 /** Delivered orders the customer has not confirmed are completed automatically after this. */
 export const AUTO_COMPLETE_AFTER_MS = 48 * 60 * 60 * 1000;
 
+/** Orders a shop has not accepted within this window are cancelled so customers are not left waiting. */
+export function acceptanceTimeoutMs(): number {
+  const hours = Number(process.env.SHOP_ACCEPTANCE_TIMEOUT_HOURS);
+  return (Number.isFinite(hours) && hours > 0 ? hours : 24) * 60 * 60 * 1000;
+}
+
 const money = (value: number) => Math.round(value * 100) / 100;
 
 export function orderReference(prefix = 'PR'): string {
@@ -34,7 +40,7 @@ const customerStatusMessages: Partial<Record<OrderStatus, (reference: string, re
   REJECTED: (reference, reason) => ({ title: 'Order declined', body: `The shop could not take order ${reference}${reason ? `: ${reason}` : '.'} You have not been charged.` }),
   PRINTING: (reference) => ({ title: 'Printing started', body: `Order ${reference} is being printed.` }),
   READY_FOR_PICKUP: (reference) => ({ title: 'Ready for delivery', body: `Order ${reference} is printed and waiting for a rider.` }),
-  CANCELLED: (reference, reason) => ({ title: 'Order cancelled', body: `Order ${reference} was cancelled${reason ? `: ${reason}` : '.'}` }),
+  CANCELLED: (reference, reason) => ({ title: 'Order cancelled', body: `Order ${reference} was cancelled${reason ? `: ${reason}` : '.'} You have not been charged.` }),
   COMPLETED: (reference) => ({ title: 'Order completed', body: `Order ${reference} is complete. Thank you for using QuickDoc.` }),
 };
 
@@ -167,6 +173,8 @@ export async function completeDeliveredOrder(
   await tx.orderStatusHistory.create({
     data: { id: randomUUID(), orderId, status: 'COMPLETED', actorId, reason },
   });
+  // Delivery is only confirmed with the customer's PIN, so the cash has been collected.
+  await markCashCollected(tx, orderId);
   await settleCompletedOrder(tx, orderId);
   return true;
 }

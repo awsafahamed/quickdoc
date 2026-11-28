@@ -6,3 +6,9 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 @media(max-width:1050px){.admin-sidebar{width:230px}.admin-main{width:calc(100% - 230px);margin-left:230px}.admin-content{padding-inline:4%}.admin-table-row{grid-template-columns:1.5fr repeat(3,1fr)}.metric-grid--finance{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:680px){.admin-sidebar{width:min(290px,86vw)}.admin-main{width:100%;margin:0}.admin-content{padding:30px 16px 56px}.admin-heading{align-items:flex-start}.admin-heading h1{font-size:26px}.admin-heading__description{font-size:12px!important}.resource-toolbar{align-items:flex-start;flex-direction:column}.search-field{width:100%}.result-count{align-self:flex-end}.data-table table{min-width:840px}.pagination{align-items:flex-start;flex-direction:column}.catalogue-summary{align-items:flex-start;flex-direction:column;gap:4px}.catalogue-summary small{margin-left:0}.metric-grid--finance{grid-template-columns:1fr 1fr}.metric-grid--finance .metric-card__money{font-size:18px}.settings-card{grid-template-columns:1fr}.settings-card .operational-note,.settings-card .success-notice,.settings-card .primary-action{grid-column:auto}.topbar__role{display:none}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+/* UX audit: wide tables scroll inside their card instead of stretching the page on phones */
+.admin-main{min-width:0;max-width:100%}
+.admin-content{max-width:100%}
+.data-table{position:relative;max-width:100%;-webkit-overflow-scrolling:touch}
+@media(max-width:680px){.admin-main{width:100vw;overflow-x:hidden}.data-table td{white-space:nowrap;max-width:none}.data-table td .table-secondary{white-space:nowrap}}

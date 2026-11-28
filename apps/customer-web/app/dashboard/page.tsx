@@ -1,7 +1,7 @@
 'use client';
 
 import { geocodeAddress } from '../geocode';
-import { ChangeEvent, useEffect, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
 import CustomerSupportPage from './support-page';
 import PrintRequestFlow, { type PrintOrderSummary, type SavedDocument } from './print-request';
 import AttestationRequestFlow, { type AttestationBookingResult } from './attestation-request';
@@ -27,13 +27,30 @@ type Order = {
   type: string;
   detail: string;
   status: string;
-  tone: 'blue' | 'green';
+  tone: 'blue' | 'green' | 'amber' | 'grey';
   date: string;
   payment?: { status: string; method: string; amount: number | string; currency: string } | null;
   deliveryPin?: string | null;
   handoverLocked?: boolean;
   reviewed?: boolean;
+  details?: {
+    lines: { label: string; value: string }[];
+    breakdown: { label: string; amount: number }[];
+    currency: string;
+    timeline: { status: string; at: string; reason?: string | null }[];
+  };
 };
+
+const ACTIVE_STATUSES = ['PENDING_ACCEPTANCE', 'ACCEPTED', 'PRINTING', 'READY_FOR_PICKUP', 'RIDER_ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'PICKUP_SCHEDULED', 'COLLECTED', 'AGENT_RECEIVED', 'PROCESSING', 'ATTESTED', 'RETURN_READY'];
+const isActive = (order: Order) => ACTIVE_STATUSES.includes(order.status);
+function statusTone(status: string): 'blue' | 'green' | 'amber' | 'grey' {
+  if (['COMPLETED', 'DELIVERED'].includes(status)) return 'green';
+  if (['CANCELLED', 'REJECTED', 'DELIVERY_FAILED'].includes(status)) return 'grey';
+  if (['PENDING_ACCEPTANCE', 'PICKUP_SCHEDULED'].includes(status)) return 'amber';
+  return 'blue';
+}
+const humanize = (value: string) => value.replaceAll('_', ' ').toLowerCase().replace(/^./, (first) => first.toUpperCase());
+const money = (currency: string, amount: number | string) => `${currency} ${Number(amount).toFixed(2)}`;
 
 const PRINT_CANCELLABLE = ['PENDING_ACCEPTANCE', 'ACCEPTED'];
 const PIN_STAGES = ['READY_FOR_PICKUP', 'RIDER_ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY'];
@@ -62,6 +79,17 @@ export type OrderActions = {
   onCancel: (order: Order) => void;
   onNewPin: (order: Order) => void;
   onReview: (order: Order, shopRating: number, comment: string) => Promise<void>;
+};
+type CustomerOrderResponse = {
+  id: string; reference: string; status: string; createdAt: string; currency: string;
+  total?: number | string; printSubtotal?: number | string; deliveryFee?: number | string; platformFee?: number | string;
+  deliveryAddress?: { line?: string } | null;
+  deliveryPin?: string | null; handoverLocked?: boolean; Review?: unknown;
+  Payment: { status: string; method: string; amount: number | string } | null;
+  Shop: { name: string; address?: string; phone?: string } | null;
+  OrderItem?: { copies: number; printedSides: number; paperSize: string; colour: boolean; duplex: boolean; binding?: string | null; stapling: boolean; lamination: boolean; Document?: { name: string } | null }[];
+  OrderStatusHistory?: { status: string; reason?: string | null; createdAt: string }[];
+  DeliveryAssignment?: { RiderProfile?: { User?: { name?: string } | null } | null } | null;
 };
 type SavedAddressRow = { id: string; label: string; line: string; latitude?: number | string | null; longitude?: number | string | null };
 type CustomerNotification = { id: string; title: string; text: string; time: string; unread: boolean };
@@ -101,7 +129,10 @@ function OrderRow({ order, actions }: { order: Order; actions?: OrderActions }) 
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [reviewing, setReviewing] = useState(false);
+  const [open, setOpen] = useState(false);
   const isPrint = order.type === 'Print & Deliver';
+  const problem = ['REJECTED', 'CANCELLED', 'DELIVERY_FAILED'].includes(order.status);
+  const lastReason = order.details?.timeline.find((event) => event.reason && ['REJECTED', 'CANCELLED', 'DELIVERY_FAILED', 'CANCELLED_BY_CUSTOMER'].includes(event.status))?.reason;
   const cancellable = order.backendId && (isPrint ? PRINT_CANCELLABLE.includes(order.status) : order.status === 'PICKUP_SCHEDULED');
   const showPin = isPrint && PIN_STAGES.includes(order.status);
   return (
@@ -114,9 +145,12 @@ function OrderRow({ order, actions }: { order: Order; actions?: OrderActions }) 
           ? <span className="delivery-pin" aria-live="polite">Delivery PIN <strong>{order.deliveryPin}</strong><small>Give this to the rider only when you receive your documents.</small></span>
           : <small>No delivery PIN is available for this order. Issue one before the rider arrives.</small>)}
         {order.handoverLocked && <small className="quote-error">Too many incorrect PIN attempts. Issue a new PIN to continue.</small>}
+        {problem && lastReason && <small className="order-row__reason">Reason: {lastReason}</small>}
+        {order.status === 'DELIVERY_FAILED' && <small className="order-row__reason">Your documents are with the rider or shop. Contact support and we will arrange the next step.</small>}
       </div>
       <div className="order-row__status"><span className={`status-dot status-dot--${order.tone}`} />{statusText[order.status] ?? order.status.replaceAll('_', ' ').toLowerCase()}<small>{order.date}</small></div>
       <div className="order-row__actions">
+        {order.details && <button className="button button--quiet button--small" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? 'Hide details' : 'Details'}</button>}
         {order.status === 'DELIVERED' && order.backendId && actions && <button className="button button--secondary button--small" type="button" onClick={() => actions.onConfirmDelivery(order)}>Confirm delivery</button>}
         {showPin && actions && <button className="button button--quiet button--small" type="button" onClick={() => actions.onNewPin(order)}>{order.deliveryPin ? 'New PIN' : 'Issue PIN'}</button>}
         {cancellable && actions && <button className="button button--quiet button--small" type="button" onClick={() => { if (window.confirm(`Cancel ${order.id}? This cannot be undone.`)) actions.onCancel(order); }}>Cancel</button>}
@@ -128,6 +162,11 @@ function OrderRow({ order, actions }: { order: Order; actions?: OrderActions }) 
             </form>
           : <button className="button button--quiet button--small" type="button" onClick={() => setReviewing(true)}>Rate order</button>)}
       </div>
+      {open && order.details && <div className="order-details">
+        {order.details.lines.length > 0 && <dl className="order-details__lines">{order.details.lines.map((line, index) => <div key={`${line.label}-${index}`}><dt>{line.label}</dt><dd>{line.value}</dd></div>)}</dl>}
+        {order.details.breakdown.length > 0 && <dl className="order-details__money">{order.details.breakdown.map((line) => <div key={line.label} className={line.label.startsWith('Total') || line.label.startsWith('Quoted') ? 'order-details__total' : ''}><dt>{line.label}</dt><dd>{money(order.details!.currency, line.amount)}</dd></div>)}</dl>}
+        {order.details.timeline.length > 0 && <ol className="order-timeline">{order.details.timeline.map((event, index) => <li key={`${event.status}-${event.at}-${index}`}><strong>{statusText[event.status] ?? humanize(event.status)}</strong><time>{new Date(event.at).toLocaleString()}</time>{event.reason && <span>{event.reason}</span>}</li>)}</ol>}
+      </div>}
     </div>
   );
 }
@@ -190,17 +229,48 @@ export default function CustomerDashboardPage() {
         })
         .catch(() => undefined);
       fetch(`${apiUrl}/customer/orders`, { headers: authHeaders })
-        .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; createdAt: string; currency: string; deliveryPin?: string | null; handoverLocked?: boolean; Review?: unknown; Payment: { status: string; method: string; amount: number | string } | null; Shop: { name: string } }[] }> : Promise.reject())
+        .then((response) => response.ok ? response.json() as Promise<{ data: CustomerOrderResponse[] }> : Promise.reject())
         .then((result) => {
           setCustomerOrders((items) => [
-            ...result.data.map((order) => ({ id: order.reference, backendId: order.id, type: 'Print & Deliver', detail: order.Shop?.name ?? 'Printing shop', status: order.status, tone: 'blue' as const, date: new Date(order.createdAt).toLocaleDateString(), payment: order.Payment ? { ...order.Payment, currency: order.currency } : null, deliveryPin: order.deliveryPin ?? null, handoverLocked: order.handoverLocked ?? false, reviewed: Boolean(order.Review) })),
+            ...result.data.map((order) => ({
+              id: order.reference,
+              backendId: order.id,
+              type: 'Print & Deliver',
+              detail: order.Shop?.name ?? 'Printing shop',
+              status: order.status,
+              tone: statusTone(order.status),
+              date: new Date(order.createdAt).toLocaleDateString(),
+              payment: order.Payment ? { ...order.Payment, currency: order.currency } : null,
+              deliveryPin: order.deliveryPin ?? null,
+              handoverLocked: order.handoverLocked ?? false,
+              reviewed: Boolean(order.Review),
+              details: {
+                currency: order.currency,
+                lines: [
+                  ...(order.OrderItem ?? []).map((item) => ({
+                    label: item.Document?.name ?? 'Document',
+                    value: `${item.printedSides} pages · ${item.copies} ${item.copies === 1 ? 'copy' : 'copies'} · ${item.paperSize} · ${item.colour ? 'Colour' : 'Black & white'} · ${item.duplex ? 'Double-sided' : 'Single-sided'}${item.binding ? ' · Binding' : ''}${item.stapling ? ' · Stapling' : ''}${item.lamination ? ' · Lamination' : ''}`,
+                  })),
+                  ...(order.Shop ? [{ label: 'Shop', value: [order.Shop.name, order.Shop.address, order.Shop.phone].filter(Boolean).join(' · ') }] : []),
+                  ...(order.deliveryAddress?.line ? [{ label: 'Deliver to', value: order.deliveryAddress.line }] : []),
+                  ...(order.DeliveryAssignment?.RiderProfile?.User?.name ? [{ label: 'Rider', value: order.DeliveryAssignment.RiderProfile.User.name }] : []),
+                ],
+                breakdown: [
+                  { label: 'Printing', amount: Number(order.printSubtotal ?? 0) },
+                  { label: 'Delivery', amount: Number(order.deliveryFee ?? 0) },
+                  { label: 'Service fee and tax', amount: Number(order.platformFee ?? 0) },
+                  { label: 'Total', amount: Number(order.total ?? 0) },
+                ],
+                timeline: (order.OrderStatusHistory ?? []).map((event) => ({ status: event.status, at: event.createdAt, reason: event.reason })),
+              },
+            })),
             ...items.filter((order) => order.type === 'Attest & Return'),
           ]);
           setSupportOrders(result.data.map(({ id, reference }) => ({ id, reference })));
         })
         .catch(() => setCustomerOrders((items) => items.filter((order) => order.type === 'Attest & Return')));
       fetch(`${apiUrl}/attestation/me/jobs`, { headers: authHeaders })
-        .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; serviceCode: string; createdAt: string; agent?: { businessName?: string } }[] }> : Promise.reject())
+        .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; reference: string; status: string; serviceCode: string; serviceName?: string | null; quotedTotal?: number | string | null; currency?: string; pickupScheduledAt?: string | null; pickupSlot?: string | null; createdAt: string; agent?: { businessName?: string }; custodyEvents?: { eventType: string; note?: string | null; createdAt: string }[] }[] }> : Promise.reject())
         .then((result) => {
           setCustomerOrders((items) => [
             ...items.filter((order) => order.type === 'Print & Deliver'),
@@ -208,10 +278,19 @@ export default function CustomerDashboardPage() {
               id: job.reference,
               backendId: job.id,
               type: 'Attest & Return',
-              detail: [job.serviceCode, job.agent?.businessName].filter(Boolean).join(' · '),
+              detail: [job.serviceName ?? humanize(job.serviceCode), job.agent?.businessName].filter(Boolean).join(' · '),
               status: job.status,
-              tone: 'green' as const,
+              tone: statusTone(job.status),
               date: new Date(job.createdAt).toLocaleDateString(),
+              details: {
+                currency: job.currency ?? 'LKR',
+                lines: [
+                  ...(job.agent?.businessName ? [{ label: 'Agent', value: job.agent.businessName }] : []),
+                  ...(job.pickupScheduledAt ? [{ label: 'Pickup', value: `${new Date(job.pickupScheduledAt).toLocaleDateString()}${job.pickupSlot ? ` · ${job.pickupSlot}` : ''}` }] : []),
+                ],
+                breakdown: job.quotedTotal != null ? [{ label: 'Quoted total', amount: Number(job.quotedTotal) }] : [],
+                timeline: (job.custodyEvents ?? []).map((event) => ({ status: event.eventType, at: event.createdAt, reason: event.note })),
+              },
             })),
           ]);
         })
@@ -359,15 +438,16 @@ export default function CustomerDashboardPage() {
         <div className="brand"><img src="/logo/quickdoc-logo.svg" alt="QuickDoc" /></div>
         <div className="sidebar__label">Workspace</div>
         <nav className="nav-list" aria-label="Main navigation">
-          {navigation.map((item) => <button className={`nav-item ${view === item.id ? 'nav-item--active' : ''}`} key={item.id} type="button" onClick={() => goTo(item.id)}><Icon name={item.icon} /><span>{item.label}</span>{item.id === 'orders' && customerOrders.length > 0 && <span className="nav-count">{customerOrders.length}</span>}</button>)}
+          {navigation.map((item) => <button className={`nav-item ${view === item.id ? 'nav-item--active' : ''}`} key={item.id} type="button" onClick={() => goTo(item.id)}><Icon name={item.icon} /><span>{item.label}</span>{item.id === 'orders' && customerOrders.some(isActive) && <span className="nav-count" aria-label={`${customerOrders.filter(isActive).length} active orders`}>{customerOrders.filter(isActive).length}</span>}</button>)}
         </nav>
         <div className="sidebar__bottom">
           <button className="nav-item" type="button" onClick={() => goTo('profile')}><Icon name="user" /><span>My profile</span></button>
-          <div className="help-card"><span className="help-card__icon"><Icon name="help" /></span><strong>Need a hand?</strong><span>Our team is here 24/7.</span><button type="button" onClick={() => goTo('support')}>Contact support <Icon name="arrow" /></button></div>
+          <div className="help-card"><span className="help-card__icon"><Icon name="help" /></span><strong>Need a hand?</strong><span>Questions about an order? We can help.</span><button type="button" onClick={() => goTo('support')}>Contact support <Icon name="arrow" /></button></div>
           <div className="user-chip"><span className="avatar">{initials}</span><span><strong>{customerName}</strong><small>Customer account</small></span><Icon name="chevron" /></div>
         </div>
       </aside>
 
+      {mobileNavOpen && <button className="nav-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
       <div className="portal-main">
         <header className="topbar">
           <button className="mobile-menu" type="button" aria-label="Open navigation" onClick={() => setMobileNavOpen((open) => !open)}><span /><span /><span /></button>
@@ -431,18 +511,17 @@ function Dashboard({ goTo, apiState, customerOrders, customerName, actions }: { 
   return (
     <>
       <section className="welcome-row"><div><p className="date-label">{today}</p><h1>{greeting}, {customerName}.</h1><p className="welcome-copy">What do you need to get done today?</p></div></section>
-      {apiState === 'unavailable' && <div className="system-notice"><span className="system-notice__dot" /><div><strong>Workspace connection is unavailable</strong><p>Live orders and account data will appear when the API is running. Your document files are not sent anywhere from this screen.</p></div></div>}
-      {apiState === 'connected' && <div className="system-notice system-notice--success"><span className="system-notice__dot" /><div><strong>Workspace connected</strong><p>Live account data is ready to load from the customer API.</p></div></div>}
+      {apiState === 'unavailable' && <div className="system-notice"><span className="system-notice__dot" /><div><strong>We can’t reach QuickDoc right now</strong><p>Your orders will appear when the connection is back. Check your internet connection and refresh the page.</p></div></div>}
       <section className="services"><div className="section-heading"><div><p className="section-label">Services</p><h2>Make progress in a few steps.</h2></div><span className="section-note">Secure by design</span></div><div className="service-grid"><ServiceCard type="print" title="Print & Deliver" description="Upload your files, choose your finish and get them delivered from a nearby print shop." action={() => goTo('print')} /><ServiceCard type="attest" title="Attest & Return" description="Send originals through a verified process and track them safely back to your door." action={() => goTo('attest')} /></div></section>
-      <section className="orders-section"><div className="section-heading"><div><p className="section-label">In progress</p><h2>Keep an eye on your orders.</h2></div><button className="text-button text-button--muted" type="button" onClick={() => goTo('orders')}>View all <Icon name="arrow" /></button></div>{customerOrders.length ? <div className="panel">{customerOrders.slice(0, 5).map((order) => <OrderRow key={order.id} order={order} actions={actions} />)}</div> : <div className="panel empty-orders"><span className="empty-orders__icon"><Icon name="orders" /></span><span><strong>No active orders</strong><small>Start a request when you are ready.</small></span><button className="text-button" type="button" onClick={() => goTo('print')}>Get started <Icon name="arrow" /></button></div>}</section>
+      <section className="orders-section"><div className="section-heading"><div><p className="section-label">In progress</p><h2>Keep an eye on your orders.</h2></div><button className="text-button text-button--muted" type="button" onClick={() => goTo('orders')}>View all <Icon name="arrow" /></button></div>{customerOrders.some(isActive) ? <div className="panel">{customerOrders.filter(isActive).slice(0, 5).map((order) => <OrderRow key={order.id} order={order} actions={actions} />)}</div> : <div className="panel empty-orders"><span className="empty-orders__icon"><Icon name="orders" /></span><span><strong>No active orders</strong><small>Start a request when you are ready.</small></span><button className="text-button" type="button" onClick={() => goTo('print')}>Get started <Icon name="arrow" /></button></div>}</section>
     </>
   );
 }
 
 function PaymentsPage({ orders }: { orders: Order[] }) {
   const payments = orders.filter((order) => order.payment);
-  return <section className="simple-page"><h1>Payments</h1><p className="simple-page__description">Payment records attached to your print orders.</p>
-    {payments.length ? <div className="customer-payment-list">{payments.map((order) => <article className="customer-payment-row" key={order.backendId ?? order.id}><div><strong>{order.id}</strong><span>{order.type} · {order.payment?.method.replaceAll('_', ' ')}</span></div><div><strong>{order.payment?.currency} {Number(order.payment?.amount).toFixed(2)}</strong><span className={`customer-payment-status customer-payment-status--${order.payment?.status.toLowerCase()}`}>{order.payment?.status.replaceAll('_', ' ')}</span></div></article>)}</div> : <div className="panel empty-panel"><span className="empty-panel__icon"><Icon name="card" /></span><h3>No payment records yet</h3><p>Payment details will appear here when the platform records a payment for one of your orders. This page does not initiate or confirm external payments.</p></div>}
+  return <section className="simple-page"><h1>Payments</h1><p className="simple-page__description">Print orders are paid in cash to the rider when your documents arrive. Cancelled or declined orders are never charged.</p>
+    {payments.length ? <div className="customer-payment-list">{payments.map((order) => <article className="customer-payment-row" key={order.backendId ?? order.id}><div><strong>{order.id}</strong><span>{order.type} · {order.payment?.method === 'CASH_ON_DELIVERY' ? 'Cash on delivery' : 'Online payment'}</span></div><div><strong>{order.payment?.currency} {Number(order.payment?.amount).toFixed(2)}</strong><span className={`customer-payment-status customer-payment-status--${order.payment?.status.toLowerCase()}`}>{({ PENDING: order.payment?.method === 'CASH_ON_DELIVERY' ? 'Pay on delivery' : 'Pending', PAID: 'Paid', FAILED: 'Not charged', REFUNDED: 'Refunded' } as Record<string, string>)[order.payment?.status ?? ''] ?? humanize(order.payment?.status ?? '')}</span></div></article>)}</div> : <div className="panel empty-panel"><span className="empty-panel__icon"><Icon name="card" /></span><h3>No payment records yet</h3><p>Payments for your print orders will appear here after you place one.</p></div>}
   </section>;
 }
 
@@ -641,6 +720,55 @@ function DocumentLibrary({ documents, onChanged, onStartPrint }: { documents: Sa
   return <SimplePage title="My documents" description="Private PDFs you have uploaded to QuickDoc.">{actionError && <p className="flow-error" role="alert">{actionError}</p>}{documents.length ? <div className="panel">{documents.map((document) => <div className="order-row" key={document.id}><div className="order-row__mark"><Icon name="file" /></div><div className="order-row__details"><strong>{document.name}</strong><span>{document.pageCount ? `${document.pageCount} pages · ` : ''}{Math.ceil(document.sizeBytes / 1024)} KB</span></div><div className="document-actions"><button className="text-button" type="button" disabled={busyDocument === document.id} onClick={() => void preview(document)}>{busyDocument === document.id ? 'Opening…' : 'Preview'}</button><button className="text-button text-button--muted" type="button" disabled={busyDocument === document.id} onClick={() => void remove(document)}>Remove</button></div></div>)}</div> : <div className="empty-panel"><span className="empty-panel__icon"><Icon name="file" /></span><h3>No saved documents yet</h3><p>Upload a PDF in a print request to preview and securely store it here.</p><button className="button button--primary" type="button" onClick={onStartPrint}><Icon name="plus" /> Start with a print request</button></div>}</SimplePage>;
 }
 
+function ChangePasswordCard() {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setMessage('');
+    setError('');
+    if (next.length < 8) { setError('Use at least 8 characters for your new password.'); return; }
+    if (next !== confirm) { setError('The new passwords do not match.'); return; }
+    setBusy(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+      const accessToken = window.sessionStorage.getItem('print-attest-access-token');
+      const response = await fetch(`${apiUrl}/auth/password/change`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken ?? ''}` },
+        body: JSON.stringify({ currentPassword: current, newPassword: next }),
+      });
+      const result = await response.json().catch(() => null) as { data?: { accessToken: string; refreshToken: string }; message?: string | string[] } | null;
+      if (!response.ok || !result?.data) {
+        throw new Error((Array.isArray(result?.message) ? result?.message.join(', ') : result?.message) ?? 'Your password could not be changed.');
+      }
+      window.sessionStorage.setItem('print-attest-access-token', result.data.accessToken);
+      window.localStorage.setItem('print-attest-refresh-token', result.data.refreshToken);
+      setCurrent(''); setNext(''); setConfirm('');
+      setMessage('Password changed. You have been signed out on your other devices.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Your password could not be changed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <form className="profile-security panel" onSubmit={(event) => void submit(event)}>
+    <span className="trust-note__icon"><Icon name="shield" /></span>
+    <h3>Change password</h3>
+    <p>Changing it signs you out everywhere else.</p>
+    <label className="field-label">Current password<input type="password" autoComplete="current-password" required value={current} onChange={(event) => setCurrent(event.target.value)} /></label>
+    <label className="field-label">New password<input type="password" autoComplete="new-password" required minLength={8} maxLength={128} value={next} onChange={(event) => setNext(event.target.value)} /></label>
+    <label className="field-label">Confirm new password<input type="password" autoComplete="new-password" required value={confirm} onChange={(event) => setConfirm(event.target.value)} /></label>
+    {error && <p className="flow-error" role="alert">{error}</p>}
+    {message && <p className="profile-saved" role="status">{message}</p>}
+    <button className="button button--secondary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Change password'}</button>
+  </form>;
+}
+
 function ProfilePage({ session, onSave, onLogout }: { session: { name: string; email: string; phone: string } | null; onSave: (session: { name: string; email: string; phone: string }) => Promise<void>; onLogout: () => void }) {
   const [form, setForm] = useState(session ?? { name: '', email: '', phone: '' });
   const [saving, setSaving] = useState(false);
@@ -662,5 +790,5 @@ function ProfilePage({ session, onSave, onLogout }: { session: { name: string; e
       setSaving(false);
     }
   };
-  return <section className="simple-page"><p className="section-label">Account</p><h1>My profile</h1><p className="simple-page__description">Keep your contact details current so riders and support can reach you.</p><div className="profile-layout"><div className="panel profile-form"><div className="profile-heading"><span className="profile-large-avatar">{form.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'C'}</span><div><h2>{form.name || 'Your profile'}</h2><p>Customer account</p></div></div><label className="field-label">Full name<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label className="field-label">Phone number<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><label className="field-label">Email address<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="name@example.com" /></label>{saveError && <p className="flow-error" role="alert">{saveError}</p>}{saved && <p className="profile-saved" role="status">Profile saved.</p>}<div className="form-actions"><button className="button button--primary" type="button" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save changes'}</button><button className="button button--quiet" type="button" onClick={onLogout}>Log out</button></div></div><aside className="profile-security panel"><span className="trust-note__icon"><Icon name="shield" /></span><h3>Account security</h3><p>Phone verification is unavailable until an SMS provider is configured.</p></aside></div></section>;
+  return <section className="simple-page"><p className="section-label">Account</p><h1>My profile</h1><p className="simple-page__description">Keep your contact details current so riders and support can reach you.</p><div className="profile-layout"><div className="panel profile-form"><div className="profile-heading"><span className="profile-large-avatar">{form.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'C'}</span><div><h2>{form.name || 'Your profile'}</h2><p>Customer account</p></div></div><label className="field-label">Full name<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label className="field-label">Phone number<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><label className="field-label">Email address<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="name@example.com" /></label>{saveError && <p className="flow-error" role="alert">{saveError}</p>}{saved && <p className="profile-saved" role="status">Profile saved.</p>}<div className="form-actions"><button className="button button--primary" type="button" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save changes'}</button><button className="button button--quiet" type="button" onClick={onLogout}>Log out</button></div></div><ChangePasswordCard /></div></section>;
 }

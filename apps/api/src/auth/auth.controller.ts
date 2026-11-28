@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { GoogleExchangeDto, LoginDto, OtpRequestDto, OtpVerifyDto, RefreshDto, RegisterDto, ResetPasswordDto, ResetRequestDto, ShopOwnerRegisterDto } from './auth.dto';
+import { ChangePasswordDto, GoogleExchangeDto, LoginDto, OtpRequestDto, OtpVerifyDto, RefreshDto, RegisterDto, ResetPasswordDto, ResetRequestDto, ShopOwnerRegisterDto } from './auth.dto';
 
 // Credential endpoints are attractive brute-force targets; keep their per-IP budget small.
 @Throttle({ default: { limit: 20, ttl: 60_000 } })
@@ -73,6 +73,13 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return { data: await this.auth.resetPassword(dto) };
+  }
+
+  @Post('password/change')
+  @UseGuards(AuthGuard('jwt'))
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async changePassword(@Req() request: { user: { id: string } }, @Body() dto: ChangePasswordDto) {
+    return { data: await this.auth.changePassword(request.user.id, dto) };
   }
 
   @Get('session')

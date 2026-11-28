@@ -1,7 +1,8 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PrivateObjectStorageService } from '../storage/private-object-storage.service';
-import { AUTO_COMPLETE_AFTER_MS, completeDeliveredOrder, notifyUsers } from './order-lifecycle';
+import { randomUUID } from 'node:crypto';
+import { acceptanceTimeoutMs, AUTO_COMPLETE_AFTER_MS, completeDeliveredOrder, notifyUsers, voidPendingPayment } from './order-lifecycle';
 
 const SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 const BATCH_SIZE = 50;
@@ -42,9 +43,10 @@ export class OrderMaintenanceService implements OnApplicationBootstrap, OnApplic
     this.running = true;
     try {
       const completed = await this.autoCompleteDeliveredOrders();
+      const expired = await this.cancelUnacceptedOrders();
       const removed = await this.removeExpiredDocuments();
-      if (completed || removed) {
-        this.logger.log(`Maintenance: completed ${completed} delivered order(s), removed ${removed} expired document(s)`);
+      if (completed || expired || removed) {
+        this.logger.log(`Maintenance: completed ${completed} delivered order(s), cancelled ${expired} unaccepted order(s), removed ${removed} expired document(s)`);
       }
     } catch (error) {
       this.logger.error('Maintenance sweep failed', error instanceof Error ? error.stack : undefined);
@@ -82,6 +84,34 @@ export class OrderMaintenanceService implements OnApplicationBootstrap, OnApplic
       if (done) completed += 1;
     }
     return completed;
+  }
+
+  /** Cancels orders a shop never responded to, so the customer can order elsewhere. */
+  async cancelUnacceptedOrders(now = new Date()): Promise<number> {
+    const due = await this.prisma.order.findMany({
+      where: { status: 'PENDING_ACCEPTANCE', createdAt: { lte: new Date(now.getTime() - acceptanceTimeoutMs()) } },
+      select: { id: true, reference: true, customerId: true, Shop: { select: { ownerId: true } } },
+      take: BATCH_SIZE,
+    });
+    let cancelled = 0;
+    for (const order of due) {
+      const done = await this.prisma.$transaction(async (transaction) => {
+        const changed = await transaction.order.updateMany({
+          where: { id: order.id, status: 'PENDING_ACCEPTANCE' },
+          data: { status: 'CANCELLED' },
+        });
+        if (changed.count !== 1) return false;
+        await transaction.orderStatusHistory.create({
+          data: { id: randomUUID(), orderId: order.id, status: 'CANCELLED', actorId: order.customerId, reason: 'The shop did not accept the order in time' },
+        });
+        await voidPendingPayment(transaction, order.id);
+        await notifyUsers(transaction, [order.customerId], 'Order not accepted', `The shop did not accept order ${order.reference} in time, so it was cancelled. You have not been charged; you can place it with another shop.`);
+        await notifyUsers(transaction, [order.Shop.ownerId], 'Order expired', `Order ${order.reference} was cancelled because it was not accepted in time.`);
+        return true;
+      });
+      if (done) cancelled += 1;
+    }
+    return cancelled;
   }
 
   async removeExpiredDocuments(now = new Date()): Promise<number> {

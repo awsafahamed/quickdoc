@@ -28,7 +28,8 @@ import {
 } from 'class-validator';
 import { randomUUID } from 'node:crypto';
 import { handoverCodeMatches, MAX_HANDOVER_ATTEMPTS } from '../orders/handover-codes';
-import { markCashCollected } from '../orders/order-lifecycle';
+import { markCashCollected, notifyUsers } from '../orders/order-lifecycle';
+import { offerToNearbyRiders } from '../orders/dispatch';
 import { PrismaService } from '../prisma/prisma.service';
 import { calculateDeliveryFare } from './delivery-pricing';
 
@@ -121,8 +122,9 @@ const statusTransitions = {
   PICKED_UP: { from: ['RIDER_ASSIGNED'], to: 'PICKED_UP' },
   ARRIVED_DROPOFF: { from: ['PICKED_UP'], to: 'OUT_FOR_DELIVERY' },
   DELIVERED: { from: ['OUT_FOR_DELIVERY'], to: 'DELIVERED' },
+  // Before pickup a rider releases the job instead (see release), so the order is not lost.
   FAILED: {
-    from: ['RIDER_ASSIGNED', 'PICKED_UP', 'OUT_FOR_DELIVERY'],
+    from: ['PICKED_UP', 'OUT_FOR_DELIVERY'],
     to: 'DELIVERY_FAILED',
   },
 } as const;
@@ -535,6 +537,66 @@ export class RidersController {
         },
       }),
     };
+  }
+
+  /**
+   * A rider who cannot collect an assigned order hands it back before pickup. The order
+   * returns to the ready queue and is offered to other nearby riders straight away.
+   */
+  @Post('assignments/:id/release')
+  @UseGuards(AuthGuard('jwt'))
+  async release(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: RejectAssignmentDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    const profile = await this.approvedProfileFor(request);
+    const assignment = await this.prisma.deliveryAssignment.findFirst({
+      where: { id, riderId: profile.userId },
+      include: { Order: { include: { Shop: true } } },
+    });
+    if (!assignment) throw new NotFoundException('Delivery assignment was not found');
+    if (assignment.Order.status !== 'RIDER_ASSIGNED') {
+      throw new ConflictException('Only a delivery that has not been picked up can be released. Report a problem instead.');
+    }
+    const reason = dto.reason?.trim() || 'Rider could not collect the order';
+    const offered = await this.prisma.$transaction(async (transaction) => {
+      const reopened = await transaction.order.updateMany({
+        where: { id: assignment.orderId, status: 'RIDER_ASSIGNED' },
+        data: { status: 'READY_FOR_PICKUP', pinAttempts: 0 },
+      });
+      if (reopened.count !== 1) throw new ConflictException('This delivery changed; refresh and try again');
+      await transaction.deliveryStatusHistory.deleteMany({ where: { assignmentId: assignment.id } });
+      await transaction.deliveryAssignment.delete({ where: { id: assignment.id } });
+      await transaction.deliveryOffer.updateMany({
+        where: { orderId: assignment.orderId, riderId: profile.userId },
+        data: { status: 'RELEASED', updatedAt: new Date() },
+      });
+      await transaction.orderStatusHistory.create({
+        data: {
+          id: randomUUID(),
+          orderId: assignment.orderId,
+          status: 'READY_FOR_PICKUP',
+          actorId: request.user.id,
+          reason: `Rider released the delivery: ${reason}`,
+        },
+      });
+      const count = await offerToNearbyRiders(transaction, assignment.Order, assignment.Order.Shop);
+      await notifyUsers(
+        transaction,
+        [assignment.Order.Shop.ownerId],
+        'Rider released delivery',
+        `The rider for order ${assignment.Order.reference} could not collect it. ${count ? `${count} other nearby rider${count === 1 ? ' was' : 's were'} notified.` : 'No other riders are nearby yet; use Notify nearby riders to try again.'}`,
+      );
+      await notifyUsers(
+        transaction,
+        [assignment.Order.customerId],
+        'Finding a new rider',
+        `Your rider could not collect order ${assignment.Order.reference}. We are assigning another rider.`,
+      );
+      return count;
+    });
+    return { data: { released: true, notifiedRiders: offered } };
   }
 
   @Post('assignments/:id/status')

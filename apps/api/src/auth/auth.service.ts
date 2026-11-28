@@ -4,7 +4,7 @@ import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypt
 import * as bcrypt from 'bcryptjs';
 import { OAuth2Client } from 'google-auth-library';
 import { PrismaService } from '../prisma/prisma.service';
-import { LoginDto, RegisterDto, ResetPasswordDto, ResetRequestDto, OtpRequestDto, OtpVerifyDto, ShopOwnerRegisterDto } from './auth.dto';
+import { ChangePasswordDto, LoginDto, RegisterDto, ResetPasswordDto, ResetRequestDto, OtpRequestDto, OtpVerifyDto, ShopOwnerRegisterDto } from './auth.dto';
 
 export type RegistrationRole = 'CUSTOMER' | 'SHOP_OWNER' | 'RIDER' | 'AGENT';
 
@@ -203,6 +203,24 @@ export class AuthService {
       });
     });
     return { passwordReset: true };
+  }
+
+  /** Changes the password, signs out every other session and returns a fresh one for this device. */
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, include: { UserRole: true } });
+    if (!user || user.suspended) throw new UnauthorizedException('This account is unavailable');
+    if (!(await bcrypt.compare(dto.currentPassword, user.passwordHash))) {
+      throw new BadRequestException('Your current password is not correct');
+    }
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException('Choose a new password that is different from the current one');
+    }
+    const passwordHash = await bcrypt.hash(dto.newPassword, 12);
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: userId }, data: { passwordHash } }),
+      this.prisma.refreshSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } }),
+    ]);
+    return this.issueSession(user.id, user.email, user.UserRole.map((role) => role.role));
   }
 
   async requestOtp(_dto: OtpRequestDto) {
