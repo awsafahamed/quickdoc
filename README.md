@@ -88,6 +88,8 @@ The API accepts either naming style for the storage variables:
 
 Browsers upload PDFs to the QuickDoc API, not straight to the bucket. The API checks that each file is a real PDF under 25 MB and stores it privately in S3. The upload link points at the API's public URL, which Render provides automatically as `RENDER_EXTERNAL_URL`; set `API_PUBLIC_URL` on other hosts. Previews are short-lived signed S3 links that open in a new tab.
 
+**Check storage after deploying:** open `https://<api-host>/api/v1/health/storage`. It writes, reads and deletes a tiny test file. `{"status":"ok",...}` means uploads will work. Otherwise the message names the problem, such as AccessDenied, InvalidAccessKeyId, NoSuchBucket or a region mismatch, and the same S3 error is logged on the API host.
+
 As a result, the bucket needs no CORS rules. It does need:
 
 1. **Block all public access** turned on.
