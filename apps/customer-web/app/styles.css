@@ -570,3 +570,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .order-row__actions .button--quiet, .order-row__actions .button--secondary { min-height: 36px; padding: 6px 14px; background: #fff; border: 1px solid var(--line); border-radius: 18px; font-size: 13px; }
   .order-row__actions .button--secondary { color: #fff; background: var(--blue); border-color: var(--blue); }
 }
+.payment-method { display: grid; gap: 8px; margin: 0 0 18px; }
+.payment-option { display: grid; grid-template-columns: 20px 1fr; gap: 12px; align-items: start; padding: 14px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.payment-option--selected { border-color: var(--blue); box-shadow: 0 0 0 3px #155eef14; }
+.payment-option input { margin-top: 3px; accent-color: var(--blue); }
+.payment-option strong { display: block; font-size: 14px; }
+.payment-option small { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+textarea, input, select, button { font-family: inherit; }

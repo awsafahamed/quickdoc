@@ -226,6 +226,14 @@ describe('CustomerController print orders', () => {
     expect(result.data).not.toHaveProperty('pickupCodeEncrypted');
   });
 
+  it('refuses the order when the price differs from the total the customer was shown', async () => {
+    const { controller, transaction } = setup();
+    await expect(controller.createPrintOrder({ user: { id: 'customer-id' } }, order({ expectedTotal: 40 })))
+      .rejects.toThrow('The price is now LKR 52.50');
+    expect(transaction.order.create).not.toHaveBeenCalled();
+    await expect(controller.createPrintOrder({ user: { id: 'customer-id' } }, order({ expectedTotal: 52.5 }))).resolves.toBeDefined();
+  });
+
   it('refuses documents without a verified page count', async () => {
     const { controller, pricing } = setup({ pageCount: null });
     await expect(controller.createPrintOrder({ user: { id: 'customer-id' } }, order()))

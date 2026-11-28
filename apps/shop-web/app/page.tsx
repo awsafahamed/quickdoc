@@ -1,7 +1,7 @@
 'use client';
 
 import { geocodeAddress } from './geocode';
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 type View =
   | 'overview'
@@ -185,11 +185,22 @@ function useRemote<T>(path: string, initial: T) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [version, setVersion] = useState(0);
+  const silent = useRef(false);
   const reload = useCallback(() => setVersion((value) => value + 1), []);
+  // Live data (orders and deliveries) refreshes quietly in the background while visible.
+  const live = path.startsWith('/shop/me/orders') || path.startsWith('/shop/me/notifications');
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') { silent.current = true; setVersion((value) => value + 1); }
+    }, 20_000);
+    return () => window.clearInterval(timer);
+  }, [live]);
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError('');
+    const quiet = silent.current;
+    silent.current = false;
+    if (!quiet) { setLoading(true); setError(''); }
     api<Envelope<T>>(path)
       .then((result) => {
         if (active) {
@@ -197,7 +208,7 @@ function useRemote<T>(path: string, initial: T) {
           setPagination(result.pagination ?? null);
         }
       })
-      .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : 'Unable to load this information.'); })
+      .catch((reason: unknown) => { if (active && !quiet) setError(reason instanceof Error ? reason.message : 'Unable to load this information.'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [path, version]);

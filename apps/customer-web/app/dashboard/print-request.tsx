@@ -105,7 +105,7 @@ function Stepper({ step }: { step: ViewStep }) {
       <span className={step >= 1 ? 'stepper__active' : ''}>1</span><span className="stepper__line" />
       <span className={step >= 2 ? 'stepper__active' : ''}>2</span><span className="stepper__line" />
       <span className={step >= 3 ? 'stepper__active' : ''}>3</span>
-      <div className="stepper__labels"><strong>PDF & options</strong><span>Choose a shop</span><span>Delivery & review</span></div>
+      <div className="stepper__labels">{['PDF & options', 'Choose a shop', 'Delivery & payment'].map((label, index) => index + 1 === step ? <strong key={label} aria-current="step">{label}</strong> : <span key={label}>{label}</span>)}</div>
     </div>
   );
 }
@@ -270,7 +270,7 @@ export default function PrintRequestFlow({
   }, [step, config.paperSize, config.colour, customerLocation]);
 
   useEffect(() => {
-    if (step !== 2 || !selectedShopId) return;
+    if (step < 2 || !selectedShopId) return;
     const controller = new AbortController();
     setQuote(null);
     setQuoteState('loading');
@@ -369,7 +369,7 @@ export default function PrintRequestFlow({
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
         setCustomerLocation({ latitude: coords.latitude, longitude: coords.longitude });
-        setLocationMessage('Showing the closest matching documents and shops first.');
+        setLocationMessage(step === 3 ? 'Delivery location set. Your total has been updated for this location.' : 'Showing the closest matching documents and shops first.');
       },
       () => setLocationMessage('Location access was not available. Search by document, shop, or area instead.'),
       { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
@@ -565,6 +565,7 @@ export default function PrintRequestFlow({
           deliveryAddress,
           deliveryLatitude: deliveryLocation.latitude,
           deliveryLongitude: deliveryLocation.longitude,
+          expectedTotal: quote.total,
           instructions: instructions.trim() || undefined,
           clientKey: key,
         }),
@@ -669,10 +670,17 @@ export default function PrintRequestFlow({
               {locationMessage && <small role="status">{locationMessage}</small>}
             </div>
             {quote && <p className="checkout-note">Delivery distance: {quote.deliveryDistanceKm ?? config.distance} km from the shop.</p>}
+            <div className="payment-method" role="radiogroup" aria-label="Payment method">
+              <strong>Payment</strong>
+              <label className="payment-option payment-option--selected">
+                <input type="radio" name="payment-method" value="CASH_ON_DELIVERY" checked readOnly />
+                <span><strong>Cash on delivery</strong><small>Pay the rider {quote ? `${quote.currency} ${quote.total.toFixed(2)}` : 'the order total'} when your documents arrive. Nothing is charged before then.</small></span>
+              </label>
+            </div>
             <label className="field-label">Delivery instructions <span className="field-label__optional">Optional</span><textarea rows={3} value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="Gate code, landmarks or other helpful details" /></label>
             {error && <p className="flow-error" role="alert">{error}</p>}
-            <div className="form-actions"><button className="button button--primary" type="button" disabled={busy || !selectedShop || !deliveryLocation} onClick={placeOrder}>{busy ? 'Placing request…' : 'Place print request'} <Icon name="arrow" /></button><button className="button button--quiet" type="button" onClick={onBack}>Return to dashboard</button></div>
-            <p className="checkout-note">Pay the rider in cash on delivery. Nothing is charged now, and you can cancel until the shop starts printing. You will see a delivery PIN in My orders; give it to the rider only when you receive your documents.</p>
+            <div className="form-actions"><button className="button button--primary" type="button" disabled={busy || !selectedShop || !deliveryLocation} onClick={placeOrder}>{busy ? 'Placing request…' : quote ? `Place request · ${quote.currency} ${quote.total.toFixed(2)}` : 'Place print request'} <Icon name="arrow" /></button><button className="button button--quiet" type="button" onClick={onBack}>Return to dashboard</button></div>
+            <p className="checkout-note">You can cancel until the shop starts printing. After you place the request, your delivery PIN appears in My orders; give it to the rider only when you receive your documents.</p>
           </div>
           <aside className="shop-summary panel">
             <p className="section-label">Order review</p><h2>{quote?.currency} {quote?.total.toFixed(2)}</h2>
