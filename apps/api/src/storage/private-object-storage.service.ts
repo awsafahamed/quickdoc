@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -10,13 +11,12 @@ import {
   DeleteObjectCommand,
   CopyObjectCommand,
   GetObjectCommand,
-  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
   S3ServiceException,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, hkdfSync, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { PDFDocument } from 'pdf-lib';
@@ -63,6 +63,7 @@ const SHOP_CATALOG_PDF_KEY = new RegExp(CUSTOMER_PDF_KEY.source.replace('custome
 @Injectable()
 export class PrivateObjectStorageService {
   private client: S3Client | null = null;
+  private readonly logger = new Logger('DocumentStorage');
   private readonly ephemeralSigningSecret = randomBytes(32);
 
   constructor(private readonly config: ConfigService) {}
@@ -214,6 +215,54 @@ export class PrivateObjectStorageService {
     return `${this.apiBaseUrl()}/storage/local/${this.createLocalToken(token)}`;
   }
 
+  /** S3 status/code of an error, or undefined for non-S3 errors. */
+  private s3Code(error: unknown): { code: string; status?: number } | undefined {
+    if (!error || typeof error !== 'object') return undefined;
+    const candidate = error as { name?: string; Code?: string; $metadata?: { httpStatusCode?: number } };
+    if (!candidate.$metadata && !(error instanceof S3ServiceException)) return undefined;
+    return { code: candidate.Code ?? candidate.name ?? 'UnknownError', status: candidate.$metadata?.httpStatusCode };
+  }
+
+  /**
+   * Sends an S3 command. Missing objects return null when allowed; every other storage
+   * failure is logged with its S3 code and reported with a message that names the fix.
+   */
+  private async s3<T>(command: object, action: string, options: { allowNotFound?: boolean } = {}): Promise<T | null> {
+    try {
+      return await this.getClient().send(command as never) as T;
+    } catch (error) {
+      const s3 = this.s3Code(error);
+      if (!s3) throw error;
+      if (options.allowNotFound && (s3.status === 404 || s3.code === 'NotFound' || s3.code === 'NoSuchKey')) return null;
+      this.logger.error(`S3 ${action} failed: ${s3.code} (HTTP ${s3.status ?? '?'}) ${error instanceof Error ? error.message : ''}`);
+      throw this.storageException(s3.code);
+    }
+  }
+
+  private storageException(code: string) {
+    const hints: Record<string, string> = {
+      AccessDenied: 'Document storage refused access (AccessDenied). The storage access key needs s3:PutObject, s3:GetObject and s3:DeleteObject permission on this bucket.',
+      AllAccessDisabled: 'Document storage refused access (AllAccessDisabled). Check the bucket permissions.',
+      InvalidAccessKeyId: 'Document storage rejected the access key (InvalidAccessKeyId). Check AWS_ACCESS_KEY_ID.',
+      SignatureDoesNotMatch: 'Document storage rejected the secret key (SignatureDoesNotMatch). Check AWS_SECRET_ACCESS_KEY.',
+      NoSuchBucket: 'The document storage bucket was not found (NoSuchBucket). Check AWS_S3_BUCKET.',
+      PermanentRedirect: 'The storage bucket is in a different region than AWS_REGION (PermanentRedirect).',
+      AuthorizationHeaderMalformed: 'The storage bucket is in a different region than AWS_REGION (AuthorizationHeaderMalformed).',
+      IllegalLocationConstraintException: 'The storage bucket is in a different region than AWS_REGION.',
+    };
+    return new ServiceUnavailableException(hints[code] ?? `Document storage is unavailable right now (${code}). Try again shortly.`);
+  }
+
+  /** Round-trips a tiny private object so operators can verify storage settings. */
+  async checkHealth(): Promise<{ status: 'ok'; driver: string; bucket?: string; region?: string }> {
+    if (this.driver === 'local') return { status: 'ok', driver: 'local' };
+    const key = `private/healthcheck/${randomUUID()}.txt`;
+    await this.s3(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: 'ok', ContentType: 'text/plain' }), 'health write');
+    await this.s3(new GetObjectCommand({ Bucket: this.bucket, Key: key }), 'health read');
+    await this.s3(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }), 'health delete');
+    return { status: 'ok', driver: 's3', bucket: this.bucket, region: this.setting(STORAGE_SETTING_NAMES.region) };
+  }
+
   /**
    * Upload links always point at this API rather than straight at the bucket. Browsers then
    * only talk to an origin that already allows the portals (no bucket CORS needed), and the
@@ -248,22 +297,26 @@ export class PrivateObjectStorageService {
     }
 
     if (this.driver === 's3') {
-      const client = this.getClient();
-      const exists = await client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: objectKey }))
-        .then(() => true)
-        .catch((error: unknown) => {
-          if (error instanceof S3ServiceException && error.$metadata.httpStatusCode === 404) return false;
-          if ((error as { name?: string }).name === 'NotFound') return false;
-          throw error;
-        });
-      if (exists) throw new ConflictException('This upload link has already been used');
-      await client.send(new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: objectKey,
-        Body: body,
-        ContentType: 'application/pdf',
-        ContentLength: body.length,
-      }));
+      // Conditional write: refuse to overwrite instead of a separate existence check,
+      // which needs extra (ListBucket) permission to answer correctly.
+      try {
+        await this.getClient().send(new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: objectKey,
+          Body: body,
+          ContentType: 'application/pdf',
+          ContentLength: body.length,
+          IfNoneMatch: '*',
+        }));
+      } catch (error) {
+        const s3 = this.s3Code(error);
+        if (!s3) throw error;
+        if (s3.status === 412 || s3.code === 'PreconditionFailed') {
+          throw new ConflictException('This upload link has already been used');
+        }
+        this.logger.error(`S3 upload failed: ${s3.code} (HTTP ${s3.status ?? '?'}) ${error instanceof Error ? error.message : ''}`);
+        throw this.storageException(s3.code);
+      }
       return;
     }
 
@@ -306,22 +359,13 @@ export class PrivateObjectStorageService {
       return countPdfPages(document);
     }
 
-    const client = this.getClient();
-    let metadata;
-    try {
-      metadata = await client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: objectKey }));
-    } catch (error) {
-      if (error instanceof S3ServiceException && error.$metadata.httpStatusCode === 404) {
-        throw new BadRequestException('Uploaded PDF was not found');
-      }
-      throw error;
-    }
-
-    if (metadata.ContentLength !== expectedSizeBytes || metadata.ContentType !== 'application/pdf') {
-      throw new BadRequestException('Uploaded PDF metadata does not match the selected file');
-    }
-
-    const response = await client.send(new GetObjectCommand({ Bucket: this.bucket, Key: objectKey }));
+    // One read returns both the bytes and the stored content type.
+    const response = await this.s3<{ ContentType?: string; Body?: { transformToByteArray(): Promise<Uint8Array> } }>(
+      new GetObjectCommand({ Bucket: this.bucket, Key: objectKey }),
+      'read uploaded PDF',
+      { allowNotFound: true },
+    );
+    if (!response) throw new BadRequestException('Uploaded PDF was not found. Upload it again.');
     const document = await response.Body?.transformToByteArray();
     if (!document || document.length !== expectedSizeBytes) {
       throw new BadRequestException('Uploaded PDF metadata does not match the selected file');
@@ -350,13 +394,13 @@ export class PrivateObjectStorageService {
       }
       return;
     }
-    await this.getClient().send(new CopyObjectCommand({
+    await this.s3(new CopyObjectCommand({
       Bucket: this.bucket,
       CopySource: `${this.bucket}/${sourceKey.split('/').map(encodeURIComponent).join('/')}`,
       Key: destinationKey,
       ContentType: 'application/pdf',
       MetadataDirective: 'REPLACE',
-    }));
+    }), 'copy catalogue PDF');
   }
 
   async createPreviewUrl(objectKey: string, fileName: string): Promise<string> {
@@ -408,6 +452,6 @@ export class PrivateObjectStorageService {
       }
       return;
     }
-    await this.getClient().send(new DeleteObjectCommand({ Bucket: this.bucket, Key: objectKey }));
+    await this.s3(new DeleteObjectCommand({ Bucket: this.bucket, Key: objectKey }), 'delete PDF', { allowNotFound: true });
   }
 }

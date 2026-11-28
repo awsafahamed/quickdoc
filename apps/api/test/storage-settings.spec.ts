@@ -1,3 +1,4 @@
+import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { PrivateObjectStorageService } from '../src/storage/private-object-storage.service';
@@ -54,6 +55,36 @@ describe('S3 storage settings', () => {
     expect(url.hostname).toBe('other-bucket.s3.ap-south-1.amazonaws.com');
     expect(url.searchParams.has('x-amz-checksum-crc32')).toBe(false);
     expect(url.searchParams.get('X-Amz-Credential')).toContain('/ap-south-1/s3/');
+  });
+
+  it('reports S3 permission problems clearly instead of an internal server error', async () => {
+    const storage = storageWith({ ...awsNames, JWT_SECRET: 'j'.repeat(40) });
+    const key = `private/customers/${randomUUID()}/${randomUUID()}.pdf`;
+    const token = new URL(await storage.createUploadUrl(key)).pathname.split('/').pop()!;
+    const denied = Object.assign(new Error('Access Denied'), { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } });
+    (storage as unknown as { client: unknown }).client = { send: jest.fn().mockRejectedValue(denied) };
+    const error = await storage.writeUpload(token, 'application/pdf', Buffer.from('%PDF-1.7')).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as Error).message).toContain('s3:PutObject');
+  });
+
+  it('refuses a reused upload link using a conditional write (no ListBucket permission needed)', async () => {
+    const storage = storageWith({ ...awsNames, JWT_SECRET: 'j'.repeat(40) });
+    const key = `private/customers/${randomUUID()}/${randomUUID()}.pdf`;
+    const token = new URL(await storage.createUploadUrl(key)).pathname.split('/').pop()!;
+    const send = jest.fn().mockRejectedValue(Object.assign(new Error('At least one of the pre-conditions failed'), { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } }));
+    (storage as unknown as { client: unknown }).client = { send };
+    await expect(storage.writeUpload(token, 'application/pdf', Buffer.from('%PDF-1.7'))).rejects.toBeInstanceOf(ConflictException);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].input).toEqual(expect.objectContaining({ IfNoneMatch: '*' }));
+  });
+
+  it('health check writes, reads and deletes a test object', async () => {
+    const storage = storageWith(awsNames);
+    const names: string[] = [];
+    (storage as unknown as { client: unknown }).client = { send: jest.fn(async (command: { constructor: { name: string } }) => { names.push(command.constructor.name); return {}; }) };
+    await expect(storage.checkHealth()).resolves.toEqual({ status: 'ok', driver: 's3', bucket: 'quickdoc-storage-unique-id', region: 'ap-south-1' });
+    expect(names).toEqual(['PutObjectCommand', 'GetObjectCommand', 'DeleteObjectCommand']);
   });
 
   it('does not warn about missing storage when only AWS_* names are configured', () => {
