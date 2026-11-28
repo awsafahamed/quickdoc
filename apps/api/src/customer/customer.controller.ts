@@ -172,6 +172,13 @@ class PrintOrderDto {
   @IsUUID()
   clientKey!: string;
 
+  /** The total the customer was shown; the order is refused if the server price differs. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  expectedTotal?: number;
+
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(30)
@@ -581,6 +588,9 @@ export class CustomerController {
     const platformFee = Number((quote.total - printSubtotal - deliveryFee).toFixed(2));
     const commission = Number((printSubtotal * SHOP_COMMISSION_RATE).toFixed(2));
     const total = quote.total;
+    if (dto.expectedTotal !== undefined && Math.abs(dto.expectedTotal - total) > 0.009) {
+      throw new ConflictException(`The price is now LKR ${total.toFixed(2)} (you were shown LKR ${dto.expectedTotal.toFixed(2)}). Review the updated total and place the request again.`);
+    }
     const { fields: handoverFields } = issueHandoverCodes();
     const orderId = randomUUID();
     try {

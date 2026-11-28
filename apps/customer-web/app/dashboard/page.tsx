@@ -230,6 +230,32 @@ export default function CustomerDashboardPage() {
           window.localStorage.setItem('print-attest-session', JSON.stringify(nextSession));
         })
         .catch(() => undefined);
+      fetch(`${apiUrl}/customer/documents`, { headers: authHeaders })
+        .then((response) => response.ok ? response.json() as Promise<{ data: typeof documents }> : Promise.reject())
+        .then((result) => setDocuments(result.data))
+        .catch(() => setDocuments([]));
+      fetch(`${apiUrl}/customer/addresses`, { headers: authHeaders })
+        .then((response) => response.ok ? response.json() as Promise<{ data: typeof addresses }> : Promise.reject())
+        .then((result) => setAddresses(result.data))
+        .catch(() => setAddresses([]));
+    }
+  }, []);
+
+  // Orders, bookings and notifications stay live: refreshed on a timer, when the app returns
+  // to the foreground, and right after the customer places something.
+  const [liveKey, setLiveKey] = useState(0);
+  const refreshLive = () => setLiveKey((key) => key + 1);
+  useEffect(() => {
+    const tick = window.setInterval(() => { if (document.visibilityState === 'visible') refreshLive(); }, 30_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshLive(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { window.clearInterval(tick); document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
+  useEffect(() => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+    const accessToken = window.sessionStorage.getItem('print-attest-access-token');
+    if (!accessToken && !window.localStorage.getItem('print-attest-refresh-token')) return;
+    const authHeaders = { Authorization: `Bearer ${accessToken ?? ''}` };
       fetch(`${apiUrl}/customer/orders`, { headers: authHeaders })
         .then((response) => response.ok ? response.json() as Promise<{ data: CustomerOrderResponse[] }> : Promise.reject())
         .then((result) => {
@@ -297,14 +323,6 @@ export default function CustomerDashboardPage() {
           ]);
         })
         .catch(() => undefined);
-      fetch(`${apiUrl}/customer/documents`, { headers: authHeaders })
-        .then((response) => response.ok ? response.json() as Promise<{ data: typeof documents }> : Promise.reject())
-        .then((result) => setDocuments(result.data))
-        .catch(() => setDocuments([]));
-      fetch(`${apiUrl}/customer/addresses`, { headers: authHeaders })
-        .then((response) => response.ok ? response.json() as Promise<{ data: typeof addresses }> : Promise.reject())
-        .then((result) => setAddresses(result.data))
-        .catch(() => setAddresses([]));
       fetch(`${apiUrl}/customer/notifications`, { headers: authHeaders })
         .then((response) => response.ok ? response.json() as Promise<{ data: { id: string; title: string; body: string; readAt: string | null; createdAt: string }[] }> : Promise.reject())
         .then((result) => setNotifications(result.data.map((item) => ({
@@ -315,8 +333,7 @@ export default function CustomerDashboardPage() {
           unread: !item.readAt,
         }))))
         .catch(() => setNotifications([]));
-    }
-  }, []);
+  }, [liveKey]);
 
   const goTo = (nextView: View) => {
     setView(nextView);
@@ -361,6 +378,7 @@ export default function CustomerDashboardPage() {
       }
       setCustomerOrders((items) => items.map((item) => item.backendId === order.backendId ? { ...item, status: 'COMPLETED' } : item));
       setOrderNotice(`Delivery for ${order.id} confirmed.`);
+      refreshLive();
     } catch (caught) {
       setOrderError(caught instanceof Error ? caught.message : 'Delivery could not be confirmed.');
     }
@@ -384,7 +402,7 @@ export default function CustomerDashboardPage() {
   const runOrderAction = async (action: () => Promise<void>) => {
     setOrderError('');
     setOrderNotice('');
-    try { await action(); } catch (caught) {
+    try { await action(); refreshLive(); } catch (caught) {
       setOrderError(caught instanceof Error ? caught.message : 'The request could not be completed.');
     }
   };
@@ -503,6 +521,7 @@ export default function CustomerDashboardPage() {
               const nextOrder: Order = { id: order.reference, backendId: order.id, type: 'Print & Deliver', detail: order.shopName, status: order.status, tone: 'blue', date: new Date().toLocaleDateString() };
               setCustomerOrders((items) => [nextOrder, ...items.filter((item) => item.id !== nextOrder.id)]);
               setSupportOrders((items) => [{ id: order.id, reference: order.reference }, ...items.filter((item) => item.id !== order.id)]);
+              refreshLive();
               goTo('orders');
             }}
             onBack={() => goTo('dashboard')}
@@ -511,6 +530,7 @@ export default function CustomerDashboardPage() {
             onBooked={(booking: AttestationBookingResult) => {
               const nextOrder: Order = { id: booking.reference, backendId: booking.id, type: 'Attest & Return', detail: booking.agent.businessName, status: booking.status, tone: 'green', date: new Date().toLocaleDateString() };
               setCustomerOrders((items) => [nextOrder, ...items.filter((item) => item.id !== nextOrder.id)]);
+              refreshLive();
             }}
             onViewOrders={() => goTo('orders')}
             onBack={() => goTo('dashboard')}

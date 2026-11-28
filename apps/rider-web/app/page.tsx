@@ -582,7 +582,7 @@ function ActiveDeliveryPage({ assignments, onUpdated }: { assignments: RiderAssi
           mapsLink(selected.Order.deliveryAddress) ? <a key="map" href={mapsLink(selected.Order.deliveryAddress)!} target="_blank" rel="noreferrer">Directions</a> : null,
         ].filter(Boolean).flatMap((link, index) => index ? [<span key={`sep-${index}`} aria-hidden="true">·</span>, link] : [link])}</p></div>
         {selected.Order.Payment?.method === 'CASH_ON_DELIVERY' && <div className="cash-collect"><span>Collect in cash</span><strong>{selected.Order.currency ?? 'LKR'} {Number(selected.Order.Payment.amount).toFixed(2)}</strong><small>{selected.Order.Payment.status === 'PAID' ? 'Recorded as collected' : 'Collect before entering the delivery PIN.'}</small></div>}
-        <h3>Delivery progress</h3><div className="delivery-history">{selected.DeliveryStatusHistory.map((event) => <div key={event.id}><i /><span><strong>{event.status.replaceAll('_', ' ')}</strong><small>{new Date(event.createdAt).toLocaleString()}{event.reason ? ` · ${event.reason}` : ''}</small></span></div>)}</div>
+        <h3>Delivery progress</h3><div className="delivery-history">{selected.DeliveryStatusHistory.map((event) => <div key={event.id}><i /><span><strong>{deliveryStepLabels[event.status] ?? event.status.replaceAll('_', ' ').toLowerCase()}</strong><small>{new Date(event.createdAt).toLocaleString()}{event.reason ? ` · ${event.reason}` : ''}</small></span></div>)}</div>
       </section>
       <aside className="handover-panel"><h2>Update delivery</h2>{selected.Order.status === 'RIDER_ASSIGNED' && <form onSubmit={(event) => { event.preventDefault(); void updateStatus('PICKED_UP', { handoverCode: handoverCode.trim() }); }}><label>Shop pickup code<input value={handoverCode} onChange={(event) => setHandoverCode(event.target.value.toUpperCase())} inputMode="text" autoComplete="one-time-code" maxLength={6} pattern="[A-Fa-f0-9]{6}" required /></label><small>Ask the shop to provide the pickup code in person.</small><button type="submit" disabled={busy || !/^[A-Fa-f0-9]{6}$/.test(handoverCode)}>{busy ? 'Verifying…' : 'Confirm pickup'}</button></form>}
         {selected.Order.status === 'PICKED_UP' && <><p>Confirm that you are starting the trip to the customer.</p><button type="button" disabled={busy} onClick={() => void updateStatus('ARRIVED_DROPOFF')}>{busy ? 'Updating…' : 'Start delivery'}</button></>}
@@ -594,6 +594,17 @@ function ActiveDeliveryPage({ assignments, onUpdated }: { assignments: RiderAssi
     </div>}
   </section>;
 }
+
+const deliveryStepLabels: Record<string, string> = {
+  OFFERED: 'Offered to you',
+  ACCEPTED: 'You accepted',
+  ARRIVED_PICKUP: 'Arrived at shop',
+  PICKED_UP: 'Picked up from shop',
+  ARRIVED_DROPOFF: 'On the way to customer',
+  DELIVERED: 'Delivered',
+  FAILED: 'Delivery failed',
+  REJECTED: 'Declined',
+};
 
 function mapsLink(address: unknown): string | null {
   if (!address || typeof address !== 'object') return null;
